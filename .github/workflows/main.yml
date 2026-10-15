@@ -1,0 +1,51 @@
+name: Deploy services to local cluster
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'local.sh'
+      - '.github/workflows/main.yml'
+
+jobs:
+  deploy:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    name: On ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker
+      uses: docker/setup-docker-action@v4
+
+    - name: Set up Kind
+      uses: helm/kind-action@v1
+      with:
+        install_only: true
+
+    - name: Create Kind cluster and deploy services
+      run: |
+        ./local.sh create-cluster --skip-tests --skip-status
+
+    - name: Check status
+      run: |
+        ./local.sh status
+
+    - name: Run E2E tests
+      run: |
+        ./local.sh e2e-test
+
+    - name: Clean up cluster
+      run: |
+        ./local.sh delete-cluster
+        if kind get clusters | grep -q .; then
+          echo "ERROR: Clusters still exist after cleanup"
+          exit 1
+        fi
