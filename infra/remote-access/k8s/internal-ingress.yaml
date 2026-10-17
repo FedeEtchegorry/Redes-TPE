@@ -1,0 +1,132 @@
+# ==============================================================================
+# Standalone Internal Ingress Manifest for "The Store" Remote Access
+# ==============================================================================
+# This Ingress resource defines HTTP routing rules for remote and internal access
+# to "The Store" microservices using the domain `the-store.internal`.
+# Requests arriving at the cluster's Ingress controller with host headers under
+# *.the-store.internal are dispatched to their corresponding internal ClusterIP
+# services on port 80.
+# ==============================================================================
+
+# apiVersion specifies the API group and version for the Kubernetes resource.
+# networking.k8s.io/v1 is the standard GA API version for Ingress resources.
+apiVersion: networking.k8s.io/v1
+
+# kind identifies the type of resource being created.
+# An Ingress object manages external/internal HTTP(S) access to services in the cluster.
+kind: Ingress
+
+# metadata contains data that uniquely identifies the Ingress object,
+# including its name and organizational labels.
+metadata:
+  # name is the unique identifier for this Ingress resource within its namespace.
+  name: internal-ingress
+  # labels are key/value pairs attached to the object for organizational and filtering purposes.
+  labels:
+    app.kubernetes.io/name: internal-ingress
+    app.kubernetes.io/part-of: the-store
+    app.kubernetes.io/component: ingress
+
+# spec specifies the desired configuration and behavior of the Ingress resource.
+spec:
+  # ingressClassName indicates which Ingress controller should implement this Ingress.
+  # Here we target the existing NGINX Ingress controller ('nginx').
+  ingressClassName: nginx
+
+  # rules defines the collection of host-based routing rules.
+  # Incoming HTTP requests are matched against these rules based on the 'Host' header.
+  rules:
+    # --------------------------------------------------------------------------
+    # 1. Frontend Web UI Microservice
+    # --------------------------------------------------------------------------
+    # Routes all traffic for ui.the-store.internal to the 'ui' service.
+    - host: ui.the-store.internal
+      http:
+        paths:
+          # Match all URI paths beginning with '/' (entire web frontend).
+          - path: /
+            # pathType: Prefix matches based on a URL path prefix split by '/'.
+            pathType: Prefix
+            backend:
+              service:
+                # Name of the target Kubernetes Service.
+                name: ui
+                port:
+                  # Target port exposed by the 'ui' Service.
+                  number: 80
+
+    # --------------------------------------------------------------------------
+    # 2. Product Catalog Microservice
+    # --------------------------------------------------------------------------
+    # Routes all traffic for catalog.the-store.internal to the 'catalog' service.
+    - host: catalog.the-store.internal
+      http:
+        paths:
+          # Match all URI paths beginning with '/' for product catalog endpoints.
+          - path: /
+            # pathType: Prefix matches based on a URL path prefix split by '/'.
+            pathType: Prefix
+            backend:
+              service:
+                # Name of the target Kubernetes Service.
+                name: catalog
+                port:
+                  # Target port exposed by the 'catalog' Service.
+                  number: 80
+
+    # --------------------------------------------------------------------------
+    # 3. Shopping Carts Microservice
+    # --------------------------------------------------------------------------
+    # Routes all traffic for carts.the-store.internal to the 'carts' service.
+    - host: carts.the-store.internal
+      http:
+        paths:
+          # Match all URI paths beginning with '/' for shopping cart endpoints.
+          - path: /
+            # pathType: Prefix matches based on a URL path prefix split by '/'.
+            pathType: Prefix
+            backend:
+              service:
+                # Name of the target Kubernetes Service.
+                name: carts
+                port:
+                  # Target port exposed by the 'carts' Service.
+                  number: 80
+
+    # --------------------------------------------------------------------------
+    # 4. Orders Microservice
+    # --------------------------------------------------------------------------
+    # Routes all traffic for orders.the-store.internal to the 'orders' service.
+    - host: orders.the-store.internal
+      http:
+        paths:
+          # Match all URI paths beginning with '/' for order management endpoints.
+          - path: /
+            # pathType: Prefix matches based on a URL path prefix split by '/'.
+            pathType: Prefix
+            backend:
+              service:
+                # Name of the target Kubernetes Service.
+                name: orders
+                port:
+                  # Target port exposed by the 'orders' Service.
+                  number: 80
+
+    # --------------------------------------------------------------------------
+    # 5. Checkout Microservice
+    # --------------------------------------------------------------------------
+    # Routes all traffic for checkout.the-store.internal to the 'checkout' service.
+    - host: checkout.the-store.internal
+      http:
+        paths:
+          # Match all URI paths beginning with '/' for checkout and payment endpoints.
+          - path: /
+            # pathType: Prefix matches based on a URL path prefix split by '/'.
+            pathType: Prefix
+            backend:
+              service:
+                # Name of the target Kubernetes Service.
+                name: checkout
+                port:
+                  # Target port exposed by the 'checkout' Service.
+                  number: 80
