@@ -4,6 +4,7 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 NODE_IP=10.10.10.5
+INGRESS_WAIT=${INGRESS_WAIT:-60}
 FAILED=0
 
 run() {
@@ -19,12 +20,16 @@ run() {
 }
 
 service_responds() {
-    local path=/actuator/health/readiness
+    local path=/actuator/health/readiness options
     if [[ $1 == catalog || $1 == checkout ]]; then
         path=/health
     fi
-    curl --noproxy '*' --silent --show-error --fail --max-time 10 --output /dev/null \
-        --resolve "$1.the-store.internal:80:$NODE_IP" "http://$1.the-store.internal$path"
+    options=(--noproxy '*' --silent --show-error --max-time 10
+        --resolve "$1.the-store.internal:80:$NODE_IP" "http://$1.the-store.internal$path")
+    curl "${options[@]}" --fail --retry "$((INGRESS_WAIT / 3))" --retry-delay 3 --output /dev/null || {
+        curl "${options[@]}"
+        return 1
+    }
 }
 
 sysadmin_can() {
