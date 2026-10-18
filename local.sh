@@ -173,6 +173,7 @@ deploy_services() {
 
     if [ "$REMOTE_ACCESS" = true ]; then
         kubectl apply -f "$DIR/infra/remote-access/k8s/internal-ingress.yaml"
+        kubectl apply -f "$DIR/infra/remote-access/k8s/sysadmin-rbac.yaml"
     fi
 
     print_status "Waiting for all deployments to be available..."
