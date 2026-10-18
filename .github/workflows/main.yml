@@ -6,8 +6,18 @@ on:
       - main
     paths:
       - 'src/**'
+      - 'infra/**'
       - 'local.sh'
       - '.github/workflows/main.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'infra/**'
+      - 'local.sh'
+      - '.github/workflows/main.yml'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -30,9 +40,19 @@ jobs:
       with:
         install_only: true
 
+    - name: Test dnsmasq configuration
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes dnsmasq-base bind9-dnsutils
+        bash infra/remote-access/tests/dnsmasq.sh
+
     - name: Create Kind cluster and deploy services
       run: |
-        ./local.sh create-cluster --skip-tests --skip-status
+        sudo ip address add 10.10.10.5/32 dev lo
+        ./local.sh create-cluster --remote-access --skip-tests --skip-status
+
+    - name: Test remote access to the cluster
+      run: bash infra/remote-access/tests/kubernetes.sh
 
     - name: Check status
       run: |
@@ -43,6 +63,7 @@ jobs:
         ./local.sh e2e-test
 
     - name: Clean up cluster
+      if: always()
       run: |
         ./local.sh delete-cluster
         if kind get clusters | grep -q .; then
