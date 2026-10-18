@@ -46,6 +46,11 @@ jobs:
         sudo apt-get install --yes dnsmasq-base bind9-dnsutils
         bash infra/remote-access/tests/dnsmasq.sh
 
+    - name: Test PKI scripts
+      run: |
+        sudo apt-get install --yes easy-rsa openvpn
+        bash infra/remote-access/tests/pki.sh
+
     - name: Create Kind cluster and deploy services
       run: |
         sudo ip address add 10.10.10.5/32 dev lo
