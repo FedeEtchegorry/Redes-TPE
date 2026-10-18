@@ -21,6 +21,7 @@ kind: Ingress
 metadata:
   # name is the unique identifier for this Ingress resource within its namespace.
   name: internal-ingress
+  namespace: the-store
   # labels are key/value pairs attached to the object for organizational and filtering purposes.
   labels:
     app.kubernetes.io/name: internal-ingress

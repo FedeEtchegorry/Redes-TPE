@@ -77,7 +77,10 @@ create_cluster() {
     if ! kind get clusters | grep -q "^$CLUSTER_NAME$"; then
         print_status "Creating new Kind cluster '$CLUSTER_NAME'..."
 
-        cat <<EOF | kind create cluster --name $CLUSTER_NAME --config -
+        if [ "$REMOTE_ACCESS" = true ]; then
+            kind create cluster --name "$CLUSTER_NAME" --config "$DIR/infra/remote-access/k8s/kind-cluster.yaml"
+        else
+            cat <<EOF | kind create cluster --name $CLUSTER_NAME --config -
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -96,6 +99,7 @@ nodes:
     hostPort: 443
     protocol: TCP
 EOF
+        fi
 
         print_success "Cluster created successfully"
     else
@@ -166,6 +170,10 @@ deploy_services() {
 
     print_status "Applying Kubernetes manifests to namespace '$NAMESPACE'..."
     kubectl apply -f $DIR/dist/kubernetes.yaml -n $NAMESPACE
+
+    if [ "$REMOTE_ACCESS" = true ]; then
+        kubectl apply -f "$DIR/infra/remote-access/k8s/internal-ingress.yaml"
+    fi
 
     print_status "Waiting for all deployments to be available..."
     kubectl wait --namespace $NAMESPACE --for=condition=available deployments --timeout=300s --all
@@ -250,6 +258,7 @@ show_help() {
     echo "  -n, --namespace NAME Kubernetes namespace (default: the-store)"
     echo "  --skip-tests         Skip running e2e tests when creating/rebuilding cluster"
     echo "  --skip-status        Skip status display when creating/rebuilding cluster"
+    echo "  --remote-access      Use the remote-access topology (requires local IP 10.10.10.5)"
     echo "  -h, --help           Show this help"
 }
 
@@ -338,6 +347,7 @@ main() {
     NAMESPACE="the-store"
     SKIP_TESTS=false
     SKIP_STATUS=false
+    REMOTE_ACCESS=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -346,10 +356,16 @@ main() {
             -n|--namespace) NAMESPACE="$2"; shift 2 ;;
             --skip-tests) SKIP_TESTS=true; shift ;;
             --skip-status) SKIP_STATUS=true; shift ;;
+            --remote-access) REMOTE_ACCESS=true; shift ;;
             -h|--help) show_help; exit 0 ;;
             *) echo "Unknown option: $1"; show_help; exit 1 ;;
         esac
     done
+
+    if [ "$REMOTE_ACCESS" = true ] && [ "$NAMESPACE" != "the-store" ]; then
+        print_error "Remote access requires namespace 'the-store'."
+        exit 1
+    fi
 
     case $COMMAND in
         create-cluster) cmd_create_cluster;;
