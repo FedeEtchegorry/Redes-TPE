@@ -4,7 +4,7 @@
 set -euo pipefail
 umask 077
 
-CA_DIR=${1:?Usage: pki.sh CA_DIRECTORY init|issue-server|issue-client [arguments]}
+CA_DIR=${1:?Usage: pki.sh CA_DIRECTORY init|issue-server|issue-client|export-server [arguments]}
 ACTION=${2:?Missing action}
 shift 2
 mkdir -p "$CA_DIR"
@@ -67,6 +67,20 @@ case "$ACTION" in
             # Traffic to the branch LAN is sent to the gw-sucursal tunnel.
             printf 'iroute 172.16.20.0 255.255.255.0\n' >> "$CA_DIR/ccd/$CLIENT"
         fi
+        ;;
+    export-server)
+        # Files gw-vpn needs, in a new directory to copy over the management network.
+        # The CA key stays in the CA.
+        DEST=${1:?Missing output directory}
+        [[ ! -e "$DEST" ]] || fail "Output directory already exists"
+        install -d -m 700 "$DEST"
+        install -m 644 "$EASYRSA_PKI/ca.crt" "$EASYRSA_PKI/issued/gw-vpn.crt" "$EASYRSA_PKI/crl.pem" "$DEST/"
+        install -m 600 "$EASYRSA_PKI/private/gw-vpn.key" "$CA_DIR/tls-crypt.key" "$DEST/"
+        install -d -m 755 "$DEST/ccd"
+        for CLIENT_FILE in "$CA_DIR/ccd/"*; do
+            [[ -f "$CLIENT_FILE" ]] || continue
+            install -m 644 "$CLIENT_FILE" "$DEST/ccd/"
+        done
         ;;
     *) fail "Unknown action: $ACTION" ;;
 esac

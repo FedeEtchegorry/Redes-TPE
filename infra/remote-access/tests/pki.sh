@@ -7,6 +7,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 CA_DIR=$WORK/ca
 PKI=$CA_DIR/pki
+BUNDLE=$WORK/gateway-bundle
 PASSPHRASE=test-passphrase
 export EASYRSA_PASSOUT=pass:$PASSPHRASE EASYRSA_PASSIN=pass:$PASSPHRASE
 FAILED=0
@@ -101,6 +102,14 @@ only_clients() {
     [[ $ccd == "$expected" && $issued == "$expected" ]]
 }
 
+# bundle_is LISTING: the permissions and paths of the gateway bundle are exactly LISTING.
+bundle_is() {
+    local listing
+    listing=$(cd "$BUNDLE" && find . -printf '%m %p\n' | LC_ALL=C sort -k2)
+    echo "$listing"
+    [[ $listing == "$1" ]]
+}
+
 run "init creates the CA" bash "$PKI_SH" "$CA_DIR" init
 run "CA key requires the passphrase" ca_key_needs_passphrase
 run "CA certificate is a prime256v1 CA named The Store VPN CA" ca_certificate
@@ -134,4 +143,17 @@ run "admin-01 CCD assigns 10.8.0.20 and only routes the node" \
 run "gw-sucursal CCD assigns 10.8.0.30, routes the node and owns the branch LAN" \
     ccd_is gw-sucursal "ifconfig-push 10.8.0.30 255.255.255.0"$'\n'"$ROUTE"$'\n'"iroute 172.16.20.0 255.255.255.0"
 run "Refused requests leave no certificate or CCD" only_clients dev-01 admin-01 gw-sucursal
+
+run "export-server writes the gateway bundle" bash "$PKI_SH" "$CA_DIR" export-server "$BUNDLE"
+run "Gateway bundle has the gateway files and CCDs, without the CA key" bundle_is "700 .
+644 ./ca.crt
+755 ./ccd
+644 ./ccd/admin-01
+644 ./ccd/dev-01
+644 ./ccd/gw-sucursal
+644 ./crl.pem
+644 ./gw-vpn.crt
+600 ./gw-vpn.key
+600 ./tls-crypt.key"
+run "export-server refuses an existing directory" refuses export-server "$BUNDLE"
 exit "$FAILED"
