@@ -2,12 +2,15 @@
 # Tests scripts/pki.sh in a temporary directory. Requires EasyRSA 3, OpenVPN and OpenSSL.
 set -uo pipefail
 
-PKI_SH=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/pki.sh
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+PKI_SH=$ROOT/scripts/pki.sh
+CLIENT_CONF=$ROOT/clients/client.conf
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 CA_DIR=$WORK/ca
 PKI=$CA_DIR/pki
 BUNDLE=$WORK/gateway-bundle
+PROFILES=$WORK/profiles
 PASSPHRASE=test-passphrase
 export EASYRSA_PASSOUT=pass:$PASSPHRASE EASYRSA_PASSIN=pass:$PASSPHRASE
 FAILED=0
@@ -102,12 +105,39 @@ only_clients() {
     [[ $ccd == "$expected" && $issued == "$expected" ]]
 }
 
-# bundle_is LISTING: the permissions and paths of the gateway bundle are exactly LISTING.
-bundle_is() {
+# listing_is DIRECTORY LISTING: the permissions and paths under DIRECTORY are exactly LISTING.
+listing_is() {
     local listing
-    listing=$(cd "$BUNDLE" && find . -printf '%m %p\n' | LC_ALL=C sort -k2)
+    listing=$(cd "$1" && find . -printf '%m %p\n' | LC_ALL=C sort -k2)
     echo "$listing"
-    [[ $listing == "$1" ]]
+    [[ $listing == "$2" ]]
+}
+
+# block NAME FILE: the lines inside the inline <NAME> block of a profile.
+block() {
+    sed -n "/^<$1>\$/,/^<\/$1>\$/{//!p}" "$2"
+}
+
+# profile_of NAME: the profile of NAME has the client.conf options, the CA, the tls-crypt
+# key, and the certificate and key of NAME as its only certificate and private key.
+profile_of() {
+    local profile=$PROFILES/$1.ovpn
+    [[ $(sed '/^<ca>$/,$d' "$profile") == "$(cat "$CLIENT_CONF")" ]] || { echo "Options differ from client.conf"; return 1; }
+    [[ $(block ca "$profile") == "$(cat "$PKI/ca.crt")" ]] || { echo "Unexpected CA"; return 1; }
+    [[ $(block cert "$profile") == "$(openssl x509 -in "$PKI/issued/$1.crt")" ]] || { echo "Unexpected certificate"; return 1; }
+    [[ $(block key "$profile") == "$(cat "$PKI/private/$1.key")" ]] || { echo "Unexpected key"; return 1; }
+    [[ $(block tls-crypt "$profile") == "$(cat "$CA_DIR/tls-crypt.key")" ]] || { echo "Unexpected tls-crypt key"; return 1; }
+    [[ $(grep -c -- '-----BEGIN' "$profile") == 4 ]] || { echo "Unexpected PEM blocks"; return 1; }
+}
+
+# OpenVPN exits at once on an invalid option or a key that does not match the certificate;
+# with a valid profile it keeps trying to reach the server until timeout stops it. The copy
+# points to a closed local port so that no packet leaves the machine.
+openvpn_loads() {
+    local profile=$WORK/$1-local.ovpn
+    sed 's/^remote .*/remote 127.0.0.1 1/' "$PROFILES/$1.ovpn" > "$profile"
+    timeout 3 openvpn --config "$profile"
+    [[ $? == 124 ]]
 }
 
 run "init creates the CA" bash "$PKI_SH" "$CA_DIR" init
@@ -145,7 +175,7 @@ run "gw-sucursal CCD assigns 10.8.0.30, routes the node and owns the branch LAN"
 run "Refused requests leave no certificate or CCD" only_clients dev-01 admin-01 gw-sucursal
 
 run "export-server writes the gateway bundle" bash "$PKI_SH" "$CA_DIR" export-server "$BUNDLE"
-run "Gateway bundle has the gateway files and CCDs, without the CA key" bundle_is "700 .
+run "Gateway bundle has the gateway files and CCDs, without the CA key" listing_is "$BUNDLE" "700 .
 644 ./ca.crt
 755 ./ccd
 644 ./ccd/admin-01
@@ -156,4 +186,18 @@ run "Gateway bundle has the gateway files and CCDs, without the CA key" bundle_i
 600 ./gw-vpn.key
 600 ./tls-crypt.key"
 run "export-server refuses an existing directory" refuses export-server "$BUNDLE"
+
+mkdir -m 700 "$PROFILES"
+run "export-client writes the dev-01 profile" bash "$PKI_SH" "$CA_DIR" export-client dev-01 "$PROFILES/dev-01.ovpn"
+run "export-client writes the admin-01 profile" bash "$PKI_SH" "$CA_DIR" export-client admin-01 "$PROFILES/admin-01.ovpn"
+run "dev-01 profile has only the credentials of dev-01" profile_of dev-01
+run "admin-01 profile has only the credentials of admin-01" profile_of admin-01
+run "OpenVPN loads the dev-01 profile" openvpn_loads dev-01
+run "export-client refuses the gw-vpn name" refuses export-client gw-vpn "$PROFILES/gw-vpn.ovpn"
+run "export-client refuses a name that was not issued" refuses export-client ghost-01 "$PROFILES/ghost-01.ovpn"
+run "export-client refuses names that are not plain identifiers" refuses export-client ../pki/private/ca.key "$PROFILES/ca.ovpn"
+run "export-client refuses an existing file" refuses export-client dev-01 "$PROFILES/dev-01.ovpn"
+run "Profiles are readable only by their owner and refused exports leave none" listing_is "$PROFILES" "700 .
+600 ./admin-01.ovpn
+600 ./dev-01.ovpn"
 exit "$FAILED"

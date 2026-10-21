@@ -4,7 +4,7 @@
 set -euo pipefail
 umask 077
 
-CA_DIR=${1:?Usage: pki.sh CA_DIRECTORY init|issue-server|issue-client|export-server [arguments]}
+CA_DIR=${1:?Usage: pki.sh CA_DIRECTORY init|issue-server|issue-client|export-server|export-client [arguments]}
 ACTION=${2:?Missing action}
 shift 2
 mkdir -p "$CA_DIR"
@@ -15,6 +15,7 @@ export EASYRSA_CURVE=${EASYRSA_CURVE:-prime256v1}
 export EASYRSA_CRL_DAYS=${EASYRSA_CRL_DAYS:-30}
 export EASYRSA_CERT_EXPIRE=${EASYRSA_CERT_EXPIRE:-365}
 EASYRSA_BIN=${EASYRSA_BIN:-/usr/share/easy-rsa/easyrsa}
+CLIENT_CONF=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/clients/client.conf
 
 fail() {
     echo "$*" >&2
@@ -81,6 +82,28 @@ case "$ACTION" in
             [[ -f "$CLIENT_FILE" ]] || continue
             install -m 644 "$CLIENT_FILE" "$DEST/ccd/"
         done
+        ;;
+    export-client)
+        # Unified profile for OpenVPN GUI and the openvpn CLI: client.conf followed by the
+        # CA, the client certificate and key, and the tls-crypt key.
+        CLIENT=${1:?Missing certificate name}
+        DEST=${2:?Missing output profile path}
+        check_name "$CLIENT"
+        [[ -f "$CA_DIR/ccd/$CLIENT" ]] || fail "Client was not issued with issue-client"
+        [[ ! -e "$DEST" ]] || fail "Output file already exists"
+        {
+            cat "$CLIENT_CONF"
+            printf '\n<ca>\n'
+            cat "$EASYRSA_PKI/ca.crt"
+            printf '</ca>\n<cert>\n'
+            # Only the PEM block, without the text dump EasyRSA writes before it.
+            openssl x509 -in "$EASYRSA_PKI/issued/$CLIENT.crt"
+            printf '</cert>\n<key>\n'
+            cat "$EASYRSA_PKI/private/$CLIENT.key"
+            printf '</key>\n<tls-crypt>\n'
+            cat "$CA_DIR/tls-crypt.key"
+            printf '</tls-crypt>\n'
+        } > "$DEST"
         ;;
     *) fail "Unknown action: $ACTION" ;;
 esac
