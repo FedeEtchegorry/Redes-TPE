@@ -32,6 +32,13 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Check that every test is run
+      run: |
+        for test in infra/remote-access/tests/*; do
+          grep -q "$(basename "$test")" .github/workflows/main.yml ||
+            { echo "::error::$test is not run by this workflow"; exit 1; }
+        done
+
     - name: Set up Docker
       uses: docker/setup-docker-action@v4
 
@@ -50,6 +57,14 @@ jobs:
       run: |
         sudo apt-get install --yes easy-rsa openvpn
         bash infra/remote-access/tests/pki.sh
+
+    - name: Test OpenVPN server configuration
+      run: sudo bash infra/remote-access/tests/openvpn.sh
+
+    - name: Test nftables ruleset
+      run: |
+        sudo apt-get install --yes nftables
+        sudo bash infra/remote-access/tests/nftables.sh
 
     - name: Create Kind cluster and deploy services
       run: |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests gateway/nftables/nftables.conf: validates filtering rules, default policies,
-# role-based access control matching Section 6 of the project PDF, and verifies
-# that nftables parses the ruleset without syntax errors.
+# role-based access control matching Section 6 of the project PDF, and checks the
+# ruleset with nft --check. Run with sudo: --check needs CAP_NET_ADMIN.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -36,34 +36,26 @@ run "Input chain has drop policy" chain_has_policy_drop input
 run "Forward chain has drop policy" chain_has_policy_drop forward
 
 # Input chain rules
-run "Input allows loopback interface" matches_pattern 'iif[[:space:]]+"lo"[[:space:]]+accept'
+run "Input allows loopback interface" matches_pattern 'iifname[[:space:]]+"lo"[[:space:]]+accept'
 run "Input allows established and related connections" matches_pattern 'ct[[:space:]]+state[[:space:]]+established,related[[:space:]]+accept'
-run "Input accepts OpenVPN UDP 1194 on eth0 from 203.0.113.0/24" matches_pattern 'iif[[:space:]]+"eth0"[[:space:]]+ip[[:space:]]+saddr[[:space:]]+203\.0\.113\.0/24[[:space:]]+udp[[:space:]]+dport[[:space:]]+1194[[:space:]]+accept'
-run "Input accepts Split-DNS (port 53) on tun0 from 10.8.0.0/24" matches_pattern 'iif[[:space:]]+"tun0"[[:space:]]+ip[[:space:]]+saddr[[:space:]]+10\.8\.0\.0/24.*dport[[:space:]]+53[[:space:]]+accept'
-run "Input accepts SSH (port 22) on eth2 from 192.168.100.0/24" matches_pattern 'iif[[:space:]]+"eth2"[[:space:]]+ip[[:space:]]+saddr[[:space:]]+192\.168\.100\.0/24[[:space:]]+tcp[[:space:]]+dport[[:space:]]+22[[:space:]]+accept'
+run "Input accepts OpenVPN UDP 1194 on eth0 from 203.0.113.0/24" matches_pattern 'iifname[[:space:]]+"eth0"[[:space:]]+ip[[:space:]]+saddr[[:space:]]+203\.0\.113\.0/24[[:space:]]+udp[[:space:]]+dport[[:space:]]+1194[[:space:]]+accept'
+run "Input accepts Split-DNS (port 53) on tun0 from 10.8.0.0/24" matches_pattern 'iifname[[:space:]]+"tun0"[[:space:]]+ip[[:space:]]+saddr[[:space:]]+10\.8\.0\.0/24.*dport[[:space:]]+53[[:space:]]+accept'
+run "Input accepts SSH (port 22) on eth2 from 192.168.100.0/24" matches_pattern 'iifname[[:space:]]+"eth2"[[:space:]]+ip[[:space:]]+saddr[[:space:]]+192\.168\.100\.0/24[[:space:]]+tcp[[:space:]]+dport[[:space:]]+22[[:space:]]+accept'
 
 # Forward chain rules (Role-based access matrix)
-run "Forward allows established and related connections" grep -A 10 "chain forward" "$CONF" | grep -q "ct state established,related accept"
-run "Forward allows dev role (10.8.0.10-.19) to Ingress (10.10.10.5:80)" matches_pattern '10\.8\.0\.10-10\.8\.0\.19.*10\.10\.10\.5.*tcp[[:space:]]+dport[[:space:]]+80[[:space:]]+accept'
-run "Forward allows sucursal role (172.16.20.0/24) to Ingress (10.10.10.5:80)" matches_pattern '172\.16\.20\.0/24.*10\.10\.10\.5.*tcp[[:space:]]+dport[[:space:]]+80[[:space:]]+accept'
-run "Forward allows sysadmin role (10.8.0.20-.29) to SSH, 6443, 80 on 10.10.10.5" matches_pattern '10\.8\.0\.20-10\.8\.0\.29.*10\.10\.10\.5.*22.*6443.*80.*accept'
+forward_allows_established() {
+    grep -A 10 "chain forward" "$CONF" | grep -q "ct state established,related accept"
+}
+
+run "Forward allows established and related connections" forward_allows_established
+run "Forward allows dev role (10.8.0.10-.19) from tun0 to Ingress (10.10.10.5:80) via eth1" matches_pattern 'iifname[[:space:]]+"tun0"[[:space:]]+oifname[[:space:]]+"eth1".*10\.8\.0\.10-10\.8\.0\.19.*10\.10\.10\.5.*tcp[[:space:]]+dport[[:space:]]+80[[:space:]]+accept'
+run "Forward allows sucursal role (172.16.20.0/24) from tun0 to Ingress (10.10.10.5:80) via eth1" matches_pattern 'iifname[[:space:]]+"tun0"[[:space:]]+oifname[[:space:]]+"eth1".*172\.16\.20\.0/24.*10\.10\.10\.5.*tcp[[:space:]]+dport[[:space:]]+80[[:space:]]+accept'
+run "Forward allows sysadmin role (10.8.0.20-.29) from tun0 to SSH, 6443, 80 on 10.10.10.5 via eth1" matches_pattern 'iifname[[:space:]]+"tun0"[[:space:]]+oifname[[:space:]]+"eth1".*10\.8\.0\.20-10\.8\.0\.29.*10\.10\.10\.5.*22.*6443.*80.*accept'
 
 # NAT postrouting
 run "NAT postrouting table and chain exist" grep -q "table ip nat" "$CONF"
-run "SNAT translates tunnel and branch traffic to 10.10.0.1 on eth1" matches_pattern 'oif[[:space:]]+"eth1".*snat[[:space:]]+to[[:space:]]+10\.10\.0\.1'
+run "SNAT translates tunnel and branch traffic to 10.10.0.1 on eth1" matches_pattern 'oifname[[:space:]]+"eth1".*snat[[:space:]]+to[[:space:]]+10\.10\.0\.1'
 
-# Syntax validation using nftables bison parser
-test_nft_syntax() {
-    local output
-    output=$(nft -d parser -f "$CONF" 2>&1)
-    if grep -q "Error: syntax error" <<< "$output"; then
-        echo "$output"
-        return 1
-    fi
-    # Check that parser reached end of input without syntax error
-    grep -q "Now at end of input" <<< "$output"
-}
-
-run "nftables parser validates ruleset syntax" test_nft_syntax
+run "nftables accepts the ruleset (nft --check)" nft --check --file "$CONF"
 
 exit "$FAILED"
