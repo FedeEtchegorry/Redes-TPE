@@ -175,7 +175,7 @@ run "gw-sucursal CCD assigns 10.8.0.30, routes the node and owns the branch LAN"
 run "Refused requests leave no certificate or CCD" only_clients dev-01 admin-01 gw-sucursal
 
 run "export-server writes the gateway bundle" bash "$PKI_SH" "$CA_DIR" export-server "$BUNDLE"
-run "Gateway bundle has the gateway files and CCDs, without the CA key" listing_is "$BUNDLE" "700 .
+run "Gateway bundle has the gateway files and CCDs, without the CA key" listing_is "$BUNDLE" "755 .
 644 ./ca.crt
 755 ./ccd
 644 ./ccd/admin-01

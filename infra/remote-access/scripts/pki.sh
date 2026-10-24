@@ -72,9 +72,10 @@ case "$ACTION" in
     export-server)
         # Files gw-vpn needs, in a new directory to copy over the management network.
         # The CA key stays in the CA.
+        # Only the keys are private: crl.pem and the CCD files are read as the nobody user.
         DEST=${1:?Missing output directory}
         [[ ! -e "$DEST" ]] || fail "Output directory already exists"
-        install -d -m 700 "$DEST"
+        install -d -m 755 "$DEST"
         install -m 644 "$EASYRSA_PKI/ca.crt" "$EASYRSA_PKI/issued/gw-vpn.crt" "$EASYRSA_PKI/crl.pem" "$DEST/"
         install -m 600 "$EASYRSA_PKI/private/gw-vpn.key" "$CA_DIR/tls-crypt.key" "$DEST/"
         install -d -m 755 "$DEST/ccd"

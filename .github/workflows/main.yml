@@ -63,7 +63,7 @@ jobs:
 
     - name: Test nftables ruleset
       run: |
-        sudo apt-get install --yes nftables
+        sudo apt-get install --yes nftables socat
         sudo bash infra/remote-access/tests/nftables.sh
 
     - name: Create Kind cluster and deploy services
