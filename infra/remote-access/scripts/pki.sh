@@ -4,7 +4,7 @@
 set -euo pipefail
 umask 077
 
-CA_DIR=${1:?Usage: pki.sh CA_DIRECTORY init|issue-server|issue-client|export-server|export-client [arguments]}
+CA_DIR=${1:?Usage: pki.sh CA_DIRECTORY init|issue-server|issue-client|export-server|export-client|revoke|gen-crl|publish-crl [arguments]}
 ACTION=${2:?Missing action}
 shift 2
 mkdir -p "$CA_DIR"
@@ -105,6 +105,32 @@ case "$ACTION" in
             cat "$CA_DIR/tls-crypt.key"
             printf '</tls-crypt>\n'
         } > "$DEST"
+        ;;
+    revoke)
+        # Adds the certificate to the CRL. Without its CCD file the tunnel IP can be
+        # assigned again and the client is left out of later exports.
+        CLIENT=${1:?Missing certificate name}
+        check_name "$CLIENT"
+        [[ -f "$EASYRSA_PKI/issued/$CLIENT.crt" ]] || fail "No issued certificate with this name"
+        "$EASYRSA_BIN" --batch revoke "$CLIENT"
+        "$EASYRSA_BIN" --batch gen-crl
+        rm -f "$CA_DIR/ccd/$CLIENT"
+        ;;
+    gen-crl)
+        # The CRL expires after EASYRSA_CRL_DAYS: once expired, OpenVPN rejects every
+        # client, so it is generated and published again before then.
+        "$EASYRSA_BIN" --batch gen-crl
+        ;;
+    publish-crl)
+        # Copies the CRL to gw-vpn over the management network, then installs it there and
+        # ends the sessions of the given names with update-crl.sh.
+        GATEWAY=${GATEWAY:-192.168.100.1}
+        # ssh passes the names to a shell on the gateway.
+        for CLIENT in "$@"; do
+            check_name "$CLIENT"
+        done
+        scp "$EASYRSA_PKI/crl.pem" "$GATEWAY:the-store-crl.pem"
+        ssh -t "$GATEWAY" sudo /usr/local/sbin/the-store-update-crl the-store-crl.pem "$@"
         ;;
     *) fail "Unknown action: $ACTION" ;;
 esac

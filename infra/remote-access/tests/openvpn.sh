@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests gateway/openvpn/server.conf: checks its directives, then runs it with the bundle of
-# scripts/pki.sh and connects clients. Run with sudo; requires EasyRSA 3 and ping.
+# scripts/pki.sh, connects clients and revokes one of them. Run with sudo; requires EasyRSA 3,
+# ping and socat.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -86,9 +87,10 @@ wait_for() { timeout 10 bash -c 'until grep -q "$0" "$1" 2>/dev/null; do sleep 0
 issue_certificates() {
     local client
     pki init && pki issue-server &&
-        pki issue-client dev-01 dev 10 && pki export-server "$WORK/bundle" &&
+        pki issue-client dev-01 dev 10 && pki issue-client admin-01 sysadmin 20 &&
+        pki export-server "$WORK/bundle" &&
         pki issue-client rogue dev 11 || return 1   # after the export: no CCD file in the bundle
-    for client in dev-01 rogue; do
+    for client in dev-01 admin-01 rogue; do
         pki export-client "$client" "$WORK/$client.ovpn" || return 1
     done
 }
@@ -145,5 +147,71 @@ run "dev-01 gets its fixed IP 10.8.0.10 from its CCD" grep -q "MULTI: Learn: 10.
 run "A valid certificate without a CCD file is rejected (ccd-exclusive)" grep -q "authentication failed for common name 'rogue'" "$WORK/server.log"
 run "dev-01 routes only the node 10.10.10.5 through the tunnel (split tunnel)" routes_only_the_node
 run "dev-01 cannot send with the sysadmin address 10.8.0.20" spoofed_source_dropped 10.8.0.20
+
+# Revocation (CU4): a second user stays connected while dev-01 is revoked.
+MANAGEMENT_SOCKET=/run/openvpn-server/the-store.sock
+CRL=$WORK/ca/pki/crl.pem
+
+management() { printf '%s\nquit\n' "$1" | socat -t 5 - "UNIX-CONNECT:$MANAGEMENT_SOCKET"; }
+
+connected() { management "status 2" | grep -q "^CLIENT_LIST,$1,"; }
+
+both_connected() { connected dev-01 && connected admin-01; }
+
+disconnected() {
+    local attempt
+    for attempt in {1..50}; do
+        connected "$1" || return 0
+        sleep 0.2
+    done
+    return 1
+}
+
+update_crl() { BUNDLE_DIR=$WORK/bundle bash "$ROOT/gateway/openvpn/update-crl.sh" "$@"; }
+
+refuses_crl() { ! update_crl "$@"; }
+
+refuses_other_ca_crl() {
+    env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$WORK/other-ca" init &&
+        refuses_crl "$WORK/other-ca/pki/crl.pem"
+}
+
+# update_crl_says MESSAGE ARGUMENT...: update-crl succeeds and prints MESSAGE.
+update_crl_says() {
+    local message=$1 output
+    shift
+    output=$(update_crl "$@") || return 1
+    echo "$output"
+    grep -qxF "$message" <<< "$output"
+}
+
+# The bundle still has the CCD file of dev-01, so only the CRL can reject it.
+reconnection_rejected_by_crl() {
+    ip netns exec "$DEV_NS" openvpn --config "$WORK/dev-01.ovpn" --disable-dco --daemon --log "$WORK/dev-01-again.log" \
+        --writepid "$WORK/dev-01-again.pid" &&
+        wait_for "error=certificate revoked: CN=dev-01" "$WORK/server.log" &&
+        ! connected dev-01
+}
+
+connect_admin_01() {
+    openvpn --config "$WORK/admin-01.ovpn" --dev tun12 --disable-dco --daemon --log "$WORK/admin-01.log" \
+        --writepid "$WORK/admin-01.pid" --route-noexec --ifconfig-noexec --script-security 0 &&
+        wait_for "Initialization Sequence Completed" "$WORK/admin-01.log"
+}
+
+cp "$WORK/bundle/crl.pem" "$WORK/old-crl.pem"
+sleep 1   # lastUpdate has a resolution of one second
+run "admin-01 connects as a second user" connect_admin_01
+run "dev-01 and admin-01 are connected" both_connected
+run "The CA revokes dev-01" pki revoke dev-01
+run "update-crl refuses a CRL of another CA" refuses_other_ca_crl
+run "update-crl refuses names that are not plain identifiers" refuses_crl "$CRL" $'dev-01\nsignal SIGTERM'
+run "update-crl installs the CRL and ends the dev-01 session" update_crl_says "dev-01: session ended" "$CRL" dev-01
+run "The dev-01 session is gone" disconnected dev-01
+run "admin-01 stays connected" connected admin-01
+run "A new dev-01 connection is rejected by the CRL" reconnection_rejected_by_crl
+run "update-crl refuses a CRL older than the installed one" refuses_crl "$WORK/old-crl.pem"
+run "update-crl reports a name that is not connected" update_crl_says "ghost-01: not connected" "$CRL" ghost-01
+run "admin-01 is still connected" connected admin-01
 
 exit "$FAILED"

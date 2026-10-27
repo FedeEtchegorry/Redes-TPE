@@ -140,6 +140,64 @@ openvpn_loads() {
     [[ $? == 124 ]]
 }
 
+# crl_rejects NAME and crl_accepts NAME: the CRL rejects or accepts the certificate in the
+# profile of NAME, which the client keeps after a revocation.
+profile_certificate_check() {
+    block cert "$PROFILES/$1.ovpn" > "$WORK/$1.crt" &&
+        openssl verify -crl_check -CAfile "$PKI/ca.crt" -CRLfile "$PKI/crl.pem" "$WORK/$1.crt" 2>&1
+}
+
+crl_rejects() {
+    local result
+    result=$(profile_certificate_check "$1")
+    echo "$result"
+    [[ $result == *"certificate revoked"* ]]
+}
+
+crl_accepts() {
+    profile_certificate_check "$1"
+}
+
+crl_last_update() {
+    date -d "$(openssl crl -in "$PKI/crl.pem" -noout -lastupdate | cut -d= -f2)" +%s
+}
+
+# crl_expires_in_days DAYS: the CRL expires in DAYS days, rounded up.
+crl_expires_in_days() {
+    local next now
+    next=$(date -d "$(openssl crl -in "$PKI/crl.pem" -noout -nextupdate | cut -d= -f2)" +%s)
+    now=$(date +%s)
+    echo "nextUpdate: $(date -d "@$next")"
+    (( next > now + ($1 - 1) * 86400 && next <= now + $1 * 86400 ))
+}
+
+crl_renewed_after() {
+    echo "lastUpdate: $(crl_last_update), before: $1"
+    (( $(crl_last_update) > $1 ))
+}
+
+# scp and ssh stand-ins that only record their arguments.
+mkdir "$WORK/bin"
+for command in scp ssh; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$command" "$WORK/remote.log" > "$WORK/bin/$command"
+    chmod +x "$WORK/bin/$command"
+done
+
+publish_crl() {
+    PATH="$WORK/bin:$PATH" bash "$PKI_SH" "$CA_DIR" publish-crl "$@"
+}
+
+refuses_publish_crl() {
+    ! publish_crl "$@"
+}
+
+remote_commands_are() {
+    local commands
+    commands=$(cat "$WORK/remote.log")
+    echo "$commands"
+    [[ $commands == "$1" ]]
+}
+
 run "init creates the CA" bash "$PKI_SH" "$CA_DIR" init
 run "CA key requires the passphrase" ca_key_needs_passphrase
 run "CA certificate is a prime256v1 CA named The Store VPN CA" ca_certificate
@@ -200,4 +258,31 @@ run "export-client refuses an existing file" refuses export-client dev-01 "$PROF
 run "Profiles are readable only by their owner and refused exports leave none" listing_is "$PROFILES" "700 .
 600 ./admin-01.ovpn
 600 ./dev-01.ovpn"
+
+# Revocation (CU4)
+run "CRL accepts dev-01 before the revocation" crl_accepts dev-01
+run "CRL is valid for 30 days" crl_expires_in_days 30
+run "revoke refuses the gw-vpn name" refuses revoke gw-vpn
+run "revoke refuses a name that was not issued" refuses revoke ghost-01
+run "revoke revokes dev-01" bash "$PKI_SH" "$CA_DIR" revoke dev-01
+run "CRL rejects the certificate in the dev-01 profile" crl_rejects dev-01
+run "CRL still accepts admin-01" crl_accepts admin-01
+run "CRL is still signed by the CA" crl_signed_by_ca
+run "revoke refuses a name that is already revoked" refuses revoke dev-01
+run "export-client refuses a revoked name" refuses export-client dev-01 "$PROFILES/dev-01-again.ovpn"
+run "The tunnel IP of a revoked name can be assigned again" bash "$PKI_SH" "$CA_DIR" issue-client dev-02 dev 10
+run "Revoked names have no certificate or CCD left" only_clients admin-01 dev-02 gw-sucursal
+
+CRL_LAST_UPDATE=$(crl_last_update)
+sleep 1   # lastUpdate has a resolution of one second
+run "gen-crl creates a new CRL" bash "$PKI_SH" "$CA_DIR" gen-crl
+run "The new CRL is more recent" crl_renewed_after "$CRL_LAST_UPDATE"
+run "The new CRL is valid for 30 days again" crl_expires_in_days 30
+run "The new CRL still rejects dev-01" crl_rejects dev-01
+
+run "publish-crl copies the CRL to gw-vpn and ends the dev-01 session there" publish_crl dev-01
+run "publish-crl refuses names that are not plain identifiers" refuses_publish_crl 'dev-01;reboot'
+run "publish-crl sends the CRL by scp, then runs update-crl by ssh, and nothing for refused names" \
+    remote_commands_are "scp $PKI/crl.pem 192.168.100.1:the-store-crl.pem
+ssh -t 192.168.100.1 sudo /usr/local/sbin/the-store-update-crl the-store-crl.pem dev-01"
 exit "$FAILED"

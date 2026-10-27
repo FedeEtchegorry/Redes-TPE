@@ -59,7 +59,9 @@ jobs:
         bash infra/remote-access/tests/pki.sh
 
     - name: Test OpenVPN server configuration
-      run: sudo bash infra/remote-access/tests/openvpn.sh
+      run: |
+        sudo apt-get install --yes socat
+        sudo bash infra/remote-access/tests/openvpn.sh
 
     - name: Test nftables ruleset
       run: |
