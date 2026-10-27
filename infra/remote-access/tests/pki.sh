@@ -283,6 +283,6 @@ run "The new CRL still rejects dev-01" crl_rejects dev-01
 run "publish-crl copies the CRL to gw-vpn and ends the dev-01 session there" publish_crl dev-01
 run "publish-crl refuses names that are not plain identifiers" refuses_publish_crl 'dev-01;reboot'
 run "publish-crl sends the CRL by scp, then runs update-crl by ssh, and nothing for refused names" \
-    remote_commands_are "scp $PKI/crl.pem 192.168.100.1:the-store-crl.pem
-ssh -t 192.168.100.1 sudo /usr/local/sbin/the-store-update-crl the-store-crl.pem dev-01"
+    remote_commands_are "scp $PKI/crl.pem the-store-crl@192.168.100.1:the-store-crl.pem
+ssh -t the-store-crl@192.168.100.1 sudo /usr/local/sbin/the-store-update-crl the-store-crl.pem dev-01"
 exit "$FAILED"

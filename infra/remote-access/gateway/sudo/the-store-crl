@@ -1,0 +1,3 @@
+# Installed as /etc/sudoers.d/the-store-crl on gw-vpn: the CA logs in as the-store-crl to
+# publish the CRL (scripts/pki.sh publish-crl) and may only run update-crl.sh as root.
+the-store-crl ALL=(root) NOPASSWD: /usr/local/sbin/the-store-update-crl

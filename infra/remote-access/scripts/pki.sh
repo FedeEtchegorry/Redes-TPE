@@ -123,8 +123,9 @@ case "$ACTION" in
         ;;
     publish-crl)
         # Copies the CRL to gw-vpn over the management network, then installs it there and
-        # ends the sessions of the given names with update-crl.sh.
-        GATEWAY=${GATEWAY:-192.168.100.1}
+        # ends the sessions of the given names with update-crl.sh. provision/gw-vpn.sh creates
+        # the-store-crl, which may only run update-crl.sh as root.
+        GATEWAY=${GATEWAY:-the-store-crl@192.168.100.1}
         # ssh passes the names to a shell on the gateway.
         for CLIENT in "$@"; do
             check_name "$CLIENT"

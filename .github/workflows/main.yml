@@ -70,8 +70,13 @@ jobs:
 
     - name: Test the branch gateway (site-to-site)
       run: |
-        sudo apt-get install --yes tcpdump netplan.io
+        sudo apt-get install --yes tcpdump
         sudo bash infra/remote-access/tests/branch.sh
+
+    - name: Test the provisioning scripts
+      run: |
+        sudo apt-get install --yes openssh-server netplan.io
+        sudo bash infra/remote-access/tests/provision.sh
 
     - name: Create Kind cluster and deploy services
       run: |

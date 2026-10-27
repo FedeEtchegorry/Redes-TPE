@@ -2,7 +2,7 @@
 # Tests the site-to-site access of the branch (CU6): runs gw-vpn and gw-sucursal in network
 # namespaces with their configurations, the gateway bundle and the gw-sucursal profile of
 # scripts/pki.sh, and connects from host-suc, which has no VPN client, to the node.
-# Run with sudo; requires EasyRSA 3, OpenVPN, nftables, dnsmasq, dig, socat, tcpdump and netplan.
+# Run with sudo; requires EasyRSA 3, OpenVPN, nftables, dnsmasq, dig, socat and tcpdump.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -84,17 +84,6 @@ issue_certificates() {
 
 forwarding_enabled() {
     ns suc sysctl -p "$BRANCH/sysctl/the-store.conf" && [[ $(ns suc sysctl -n net.ipv4.ip_forward) == 1 ]]
-}
-
-# netplan renders the host-suc file with its address, gateway and DNS server.
-netplan_configures_host_suc() {
-    local root=$WORK/netplan network
-    install -D -m 600 "$BRANCH/host-suc/netplan.yaml" "$root/etc/netplan/90-the-store.yaml" &&
-        netplan generate --root-dir "$root" || return 1
-    network=$(cat "$root"/run/systemd/network/*eth0.network)
-    echo "$network"
-    grep -qx 'Address=172.16.20.10/24' <<< "$network" && grep -qx 'Gateway=172.16.20.1' <<< "$network" &&
-        grep -qx 'DNS=172.16.20.1' <<< "$network"
 }
 
 start_dnsmasq() {
@@ -186,11 +175,11 @@ link gw eth0 203.0.113.10/24 suc 203.0.113.20/24
 link gw eth1 10.10.0.1/16 node 10.10.10.5/16
 link suc eth1 172.16.20.1/24 host 172.16.20.10/24
 ns gw sysctl -qw net.ipv4.ip_forward=1
-# Same as branch/host-suc/netplan.yaml. The node has no route back: gw-vpn uses SNAT.
+# Same as branch/host-suc/netplan.yaml, which tests/provision.sh checks. The node has no route
+# back: gw-vpn uses SNAT.
 ns host ip route add default via 172.16.20.1
 
 run "The sysctl file enables forwarding on gw-sucursal" forwarding_enabled
-run "netplan gives host-suc its address, and gw-sucursal as gateway and DNS server" netplan_configures_host_suc
 run "The gw-vpn ruleset loads" ns gw nft --file "$ROOT/gateway/nftables/nftables.conf"
 run "The gw-sucursal ruleset loads" ns suc nft --file "$BRANCH/nftables/nftables.conf"
 run "The gw-sucursal dnsmasq configuration is valid" dnsmasq --test --conf-file="$BRANCH/dnsmasq/the-store.conf"
