@@ -27,6 +27,8 @@ put() {
 
 check_mac() {
     [[ $1 =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || fail "Invalid MAC address (lowercase, with colons): $1"
+    # A MAC address that no interface has leaves the machine without network after the reboot.
+    [[ -n $DESTDIR ]] || grep -qx "$1" /sys/class/net/*/address || fail "No interface has the MAC address $1"
 }
 
 # gateway_netplan NAME MAC ADDRESS...: names each interface by its MAC address, since nftables,

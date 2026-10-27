@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Installs on gw-vpn a CRL sent by scripts/pki.sh publish-crl, then ends the sessions of the
-# given names through the management interface (CU4). Run as root, installed as
+# Installs on gw-vpn the CRL it reads from standard input, as sent by scripts/pki.sh
+# publish-crl, then ends the sessions of the given names through the management interface (CU4).
+# Usage: update-crl.sh [COMMON_NAME...] < CRL. Run as root, installed as
 # /usr/local/sbin/the-store-update-crl. Requires OpenSSL and socat.
 set -euo pipefail
 
 BUNDLE_DIR=${BUNDLE_DIR:-/etc/openvpn/server/the-store}
 MANAGEMENT_SOCKET=${MANAGEMENT_SOCKET:-/run/openvpn-server/the-store.sock}
-CRL=${1:?Usage: update-crl.sh CRL_FILE [COMMON_NAME...]}
-shift
+CRL=$BUNDLE_DIR/crl.pem.new
 
 fail() {
     echo "$*" >&2
@@ -40,20 +40,29 @@ for NAME in "$@"; do
     [[ "$NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$ ]] || fail "Invalid certificate name"
 done
 
+# The CRL is read once, from standard input, into a file only root can write: root never opens
+# a path chosen by the caller, which could be swapped for a symlink after the checks.
+trap 'rm -f "$CRL"' EXIT
+cat > "$CRL"
+
 # openssl crl exits with 0 even when the signature does not verify, so its message is checked.
 [[ $(openssl crl -in "$CRL" -CAfile "$BUNDLE_DIR/ca.crt" -noout 2>&1) == *"verify OK"* ]] ||
     fail "CRL is not signed by the CA of the bundle"
 NEXT_UPDATE=$(crl_date "$CRL" nextupdate)
-(( NEXT_UPDATE > $(date +%s) )) || fail "CRL has expired"
-(( NEXT_UPDATE > $(date +%s) + 7 * 86400 )) || echo "Warning: CRL expires in less than 7 days" >&2
+LAST_UPDATE=$(crl_date "$CRL" lastupdate)
+NOW=$(date +%s)
+(( NEXT_UPDATE > NOW )) || fail "CRL has expired"
+(( NEXT_UPDATE > NOW + 7 * 86400 )) || echo "Warning: CRL expires in less than 7 days" >&2
+# OpenSSL rejects every client while the CRL is dated in the future, as with a CA clock ahead.
+(( LAST_UPDATE <= NOW )) || fail "CRL is dated in the future: check the clocks of the CA and gw-vpn"
 # An older CRL would accept again the certificates revoked since.
-(( $(crl_date "$CRL" lastupdate) >= $(crl_date "$BUNDLE_DIR/crl.pem" lastupdate) )) ||
+(( LAST_UPDATE >= $(crl_date "$BUNDLE_DIR/crl.pem" lastupdate) )) ||
     fail "CRL is older than the installed one"
 
 # OpenVPN reads crl.pem on each connection, as the nobody user: the rename keeps it from
 # reading a partial file.
-install -m 644 "$CRL" "$BUNDLE_DIR/crl.pem.new"
-mv -f "$BUNDLE_DIR/crl.pem.new" "$BUNDLE_DIR/crl.pem"
+chmod 644 "$CRL"
+mv -f "$CRL" "$BUNDLE_DIR/crl.pem"
 echo "CRL installed"
 
 # Only after the CRL is in place, so that the reconnection of a killed client is rejected.

@@ -176,12 +176,18 @@ crl_renewed_after() {
     (( $(crl_last_update) > $1 ))
 }
 
-# scp and ssh stand-ins that only record their arguments.
+# revoke_says_publish NAME: revokes NAME and prints when the CRL expires and how to publish it.
+revoke_says_publish() {
+    local output
+    output=$(bash "$PKI_SH" "$CA_DIR" revoke "$1") || { echo "$output"; return 1; }
+    echo "$output"
+    grep -q "^CRL valid until " <<< "$output" && grep -q "publish-crl $1" <<< "$output"
+}
+
+# ssh stand-in that records its arguments and the CRL it receives on standard input.
 mkdir "$WORK/bin"
-for command in scp ssh; do
-    printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$command" "$WORK/remote.log" > "$WORK/bin/$command"
-    chmod +x "$WORK/bin/$command"
-done
+printf '#!/bin/sh\necho "ssh $*" >> "%s"\ncat > "%s"\n' "$WORK/remote.log" "$WORK/sent-crl.pem" > "$WORK/bin/ssh"
+chmod +x "$WORK/bin/ssh"
 
 publish_crl() {
     PATH="$WORK/bin:$PATH" bash "$PKI_SH" "$CA_DIR" publish-crl "$@"
@@ -264,7 +270,7 @@ run "CRL accepts dev-01 before the revocation" crl_accepts dev-01
 run "CRL is valid for 30 days" crl_expires_in_days 30
 run "revoke refuses the gw-vpn name" refuses revoke gw-vpn
 run "revoke refuses a name that was not issued" refuses revoke ghost-01
-run "revoke revokes dev-01" bash "$PKI_SH" "$CA_DIR" revoke dev-01
+run "revoke revokes dev-01 and says how to publish the CRL" revoke_says_publish dev-01
 run "CRL rejects the certificate in the dev-01 profile" crl_rejects dev-01
 run "CRL still accepts admin-01" crl_accepts admin-01
 run "CRL is still signed by the CA" crl_signed_by_ca
@@ -282,7 +288,7 @@ run "The new CRL still rejects dev-01" crl_rejects dev-01
 
 run "publish-crl copies the CRL to gw-vpn and ends the dev-01 session there" publish_crl dev-01
 run "publish-crl refuses names that are not plain identifiers" refuses_publish_crl 'dev-01;reboot'
-run "publish-crl sends the CRL by scp, then runs update-crl by ssh, and nothing for refused names" \
-    remote_commands_are "scp $PKI/crl.pem the-store-crl@192.168.100.1:the-store-crl.pem
-ssh -t the-store-crl@192.168.100.1 sudo /usr/local/sbin/the-store-update-crl the-store-crl.pem dev-01"
+run "publish-crl runs update-crl by ssh, and nothing for refused names" \
+    remote_commands_are "ssh the-store-crl@192.168.100.1 sudo /usr/local/sbin/the-store-update-crl dev-01"
+run "publish-crl sends the CRL on standard input" cmp "$PKI/crl.pem" "$WORK/sent-crl.pem"
 exit "$FAILED"

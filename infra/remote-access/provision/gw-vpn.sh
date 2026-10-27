@@ -59,4 +59,5 @@ system chown -R "$CRL_USER:" "/home/$CRL_USER/.ssh"
 system systemctl enable nftables dnsmasq openvpn-server@the-store
 gateway_netplan eth0 "$ETH0_MAC" 203.0.113.10/24 eth1 "$ETH1_MAC" 10.10.0.1/16 \
     eth2 "$ETH2_MAC" 192.168.100.1/24 | install_netplan
+echo "SSH password login is off from the next sshd restart: put an admin key in authorized_keys before the reboot."
 echo "gw-vpn is provisioned: reboot to rename the interfaces and start the services."

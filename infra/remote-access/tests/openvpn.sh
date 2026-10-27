@@ -182,13 +182,32 @@ disconnected() {
     return 1
 }
 
-update_crl() { BUNDLE_DIR=$WORK/bundle bash "$ROOT/gateway/openvpn/update-crl.sh" "$@"; }
+# update_crl CRL_FILE [NAME...]: update-crl reads the CRL from standard input, as over ssh.
+update_crl() {
+    local crl=$1
+    shift
+    BUNDLE_DIR=$WORK/bundle bash "$ROOT/gateway/openvpn/update-crl.sh" "$@" < "$crl"
+}
 
 refuses_crl() { ! update_crl "$@"; }
 
 refuses_other_ca_crl() {
     env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$WORK/other-ca" init &&
         refuses_crl "$WORK/other-ca/pki/crl.pem"
+}
+
+# gw-vpn with its clock one hour behind the CA: the CRL is dated in its future.
+refuses_future_crl() {
+    local output
+    mkdir "$WORK/slow-clock"
+    cat > "$WORK/slow-clock/date" <<'EOF'
+#!/bin/sh
+[ "$*" = "+%s" ] && echo $(( $(/usr/bin/date +%s) - 3600 )) || exec /usr/bin/date "$@"
+EOF
+    chmod +x "$WORK/slow-clock/date"
+    output=$(PATH="$WORK/slow-clock:$PATH" update_crl "$CRL" 2>&1) && return 1
+    echo "$output"
+    grep -q "dated in the future" <<< "$output"
 }
 
 # update_crl_says MESSAGE ARGUMENT...: update-crl succeeds and prints MESSAGE.
@@ -221,6 +240,7 @@ run "dev-01 and admin-01 are connected" both_connected
 run "The CA revokes dev-01" pki revoke dev-01
 run "update-crl refuses a CRL of another CA" refuses_other_ca_crl
 run "update-crl refuses names that are not plain identifiers" refuses_crl "$CRL" $'dev-01\nsignal SIGTERM'
+run "update-crl refuses a CRL dated in the future" refuses_future_crl
 run "update-crl installs the CRL and ends the dev-01 session" update_crl_says "dev-01: session ended" "$CRL" dev-01
 run "The dev-01 session is gone" disconnected dev-01
 run "admin-01 stays connected" connected admin-01

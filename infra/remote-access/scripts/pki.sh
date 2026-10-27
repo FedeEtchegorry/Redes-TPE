@@ -29,6 +29,12 @@ check_name() {
     [[ "$1" != DEFAULT && "$1" != gw-vpn ]] || fail "Reserved certificate name"
 }
 
+# crl_notice [NAME...]: gw-vpn only has the new CRL after publish-crl.
+crl_notice() {
+    echo "CRL valid until $(openssl crl -in "$EASYRSA_PKI/crl.pem" -noout -nextupdate | cut -d= -f2)."
+    echo "Install it on gw-vpn: pki.sh $CA_DIR publish-crl $*"
+}
+
 case "$ACTION" in
     init)
         [[ ! -e "$EASYRSA_PKI" ]] || fail "PKI already exists; refusing to overwrite it"
@@ -115,23 +121,26 @@ case "$ACTION" in
         "$EASYRSA_BIN" --batch revoke "$CLIENT"
         "$EASYRSA_BIN" --batch gen-crl
         rm -f "$CA_DIR/ccd/$CLIENT"
+        # The session of the client stays up until publish-crl ends it by name.
+        crl_notice "$CLIENT"
         ;;
     gen-crl)
         # The CRL expires after EASYRSA_CRL_DAYS: once expired, OpenVPN rejects every
         # client, so it is generated and published again before then.
         "$EASYRSA_BIN" --batch gen-crl
+        crl_notice
         ;;
     publish-crl)
-        # Copies the CRL to gw-vpn over the management network, then installs it there and
-        # ends the sessions of the given names with update-crl.sh. provision/gw-vpn.sh creates
-        # the-store-crl, which may only run update-crl.sh as root.
+        # Sends the CRL to gw-vpn over the management network, where update-crl.sh installs it
+        # and ends the sessions of the given names. provision/gw-vpn.sh creates the-store-crl,
+        # which may only run update-crl.sh as root. The CRL goes by standard input: root on the
+        # gateway never opens a path chosen by this account.
         GATEWAY=${GATEWAY:-the-store-crl@192.168.100.1}
         # ssh passes the names to a shell on the gateway.
         for CLIENT in "$@"; do
             check_name "$CLIENT"
         done
-        scp "$EASYRSA_PKI/crl.pem" "$GATEWAY:the-store-crl.pem"
-        ssh -t "$GATEWAY" sudo /usr/local/sbin/the-store-update-crl the-store-crl.pem "$@"
+        ssh "$GATEWAY" sudo /usr/local/sbin/the-store-update-crl "$@" < "$EASYRSA_PKI/crl.pem"
         ;;
     *) fail "Unknown action: $ACTION" ;;
 esac
