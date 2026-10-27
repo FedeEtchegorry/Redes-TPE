@@ -1,0 +1,15 @@
+# Installed as /etc/netplan/90-the-store.yaml on host-suc (mode 600). host-suc has no VPN
+# client: gw-sucursal is its gateway and its DNS server.
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: false
+      addresses:
+        - 172.16.20.10/24
+      routes:
+        - to: default
+          via: 172.16.20.1
+      nameservers:
+        addresses:
+          - 172.16.20.1
