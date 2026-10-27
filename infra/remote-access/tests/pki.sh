@@ -35,7 +35,7 @@ ca_key_needs_passphrase() {
 ca_certificate() {
     local text
     text=$(openssl x509 -in "$PKI/ca.crt" -noout -text)
-    grep -q 'Subject: CN = The Store VPN CA' <<< "$text" &&
+    grep -qE 'Subject: CN ?= ?The Store VPN CA$' <<< "$text" &&
         grep -q 'CA:TRUE' <<< "$text" &&
         grep -q 'ASN1 OID: prime256v1' <<< "$text"
 }
@@ -61,7 +61,7 @@ server_certificate() {
     local text
     openssl verify -CAfile "$PKI/ca.crt" "$PKI/issued/gw-vpn.crt" &&
         text=$(openssl x509 -in "$PKI/issued/gw-vpn.crt" -noout -text) &&
-        grep -q 'Subject: CN = gw-vpn' <<< "$text" &&
+        grep -qE 'Subject: CN ?= ?gw-vpn$' <<< "$text" &&
         grep -q 'TLS Web Server Authentication' <<< "$text"
 }
 
@@ -74,7 +74,7 @@ client_certificates() {
     for client in "$@"; do
         openssl verify -CAfile "$PKI/ca.crt" "$PKI/issued/$client.crt" || return 1
         text=$(openssl x509 -in "$PKI/issued/$client.crt" -noout -text)
-        grep -q "Subject: CN = $client" <<< "$text" || { echo "$client: unexpected subject"; return 1; }
+        grep -qE "Subject: CN ?= ?$client\$" <<< "$text" || { echo "$client: unexpected subject"; return 1; }
         grep -q 'TLS Web Client Authentication' <<< "$text" || { echo "$client: not a TLS client"; return 1; }
     done
 }

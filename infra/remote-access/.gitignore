@@ -1,0 +1,6 @@
+pki/
+profiles/
+bundles/
+*.key
+*.ovpn
+*.pcap

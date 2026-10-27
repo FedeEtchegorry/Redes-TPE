@@ -46,4 +46,5 @@ for service in ui catalog carts orders checkout; do
 done
 run "Unknown name in the-store.internal gets NXDOMAIN" answers_status unknown.the-store.internal NXDOMAIN
 run "External name gets REFUSED" answers_status example.com REFUSED
+run "Names from /etc/hosts are not served" answers_status localhost NXDOMAIN
 exit "$FAILED"

@@ -2,6 +2,8 @@
 # Tests gateway/nftables/nftables.conf: loads it in a namespace with the interfaces of gw-vpn
 # and connects through it from namespaces for the untrusted segment, the LAN with k8s-node,
 # the management network with the CA, and the tunnel, which holds the addresses of every role.
+# Run with sudo in the host network namespace, where nf_log_all_netns can be set to log the
+# drops of a namespace. Requires socat.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -28,6 +30,7 @@ cleanup() {
     local name
     [[ ${#LISTENERS[@]} == 0 ]] || kill "${LISTENERS[@]}" 2> /dev/null
     for name in $NAMESPACES; do ip netns delete "nft-$name" 2> /dev/null; done
+    [[ -z $LOG_ALL_NETNS ]] || sysctl -qw net.netfilter.nf_log_all_netns="$LOG_ALL_NETNS"
 }
 
 # link NS1 INTERFACE1 ADDRESS1 NS2 ADDRESS2: a cable between NS1 and the eth0 of NS2.
@@ -67,7 +70,16 @@ seen_as() {
     [[ $seen == "$1" ]]
 }
 
+# logged PATTERN: a line of the kernel log written during this run matches PATTERN.
+logged() {
+    dmesg | sed -n "\|$MARKER|,\$p" | grep -E "$1" || { echo "No kernel log line matches $1"; return 1; }
+}
+
+LOG_ALL_NETNS=$(sysctl -n net.netfilter.nf_log_all_netns)
+MARKER="tests/nftables.sh $$ $(date +%s%N)"
 trap cleanup EXIT
+sysctl -qw net.netfilter.nf_log_all_netns=1
+echo "$MARKER" > /dev/kmsg
 for name in $NAMESPACES; do
     ip netns add "nft-$name"
     ns "$name" ip link set lo up
@@ -143,5 +155,10 @@ run "Management network reaches SSH on the gateway" reaches management 192.168.1
 run "Management network is not routed to the node" blocked management 192.168.100.20 10.10.10.5 tcp 22
 run "LAN cannot open connections into the tunnel" blocked lan 10.10.10.5 10.8.0.10 tcp 8000
 run "LAN cannot reach SSH on the gateway" blocked lan 10.10.10.5 10.10.0.1 tcp 22
+
+run "The input chain logs SSH from the untrusted segment" \
+    logged 'the-store input drop: IN=eth0 .*SRC=203\.0\.113\.51 DST=203\.0\.113\.10 .*DPT=22 '
+run "The forward chain logs dev trying the API server" \
+    logged 'the-store forward drop: IN=tun0 OUT=eth1 .*SRC=10\.8\.0\.10 DST=10\.10\.10\.5 .*DPT=6443 '
 
 exit "$FAILED"
