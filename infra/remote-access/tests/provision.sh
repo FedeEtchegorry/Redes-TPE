@@ -100,14 +100,14 @@ sshd_settings() {
 }
 
 # netplan_names ROOT NAME MAC ADDRESS: netplan names the interface with MAC as NAME and gives
-# it ADDRESS.
+# it ADDRESS. netplan matches the permanent MAC address, the one of the hardware.
 netplan_names() {
     local link network
     link=$(cat "$1/run/systemd/network/10-netplan-$2.link") &&
         network=$(cat "$1/run/systemd/network/10-netplan-$2.network") || return 1
     echo "$link"
     echo "$network"
-    grep -qix "MACAddress=$3" <<< "$link" && grep -qx "Name=$2" <<< "$link" && grep -qx "Address=$4" <<< "$network"
+    grep -qix "PermanentMACAddress=$3" <<< "$link" && grep -qx "Name=$2" <<< "$link" && grep -qx "Address=$4" <<< "$network"
 }
 
 host_suc_routes_through_gw_sucursal() {
