@@ -23,8 +23,9 @@ has_directive() {
     grep -qE "^[[:space:]]*$1([[:space:]]+|$)" "$CONF"
 }
 
-has_directive_exact() {
-    grep -qF "$1" "$CONF"
+# lacks PATTERN: no line outside comments matches PATTERN.
+lacks() {
+    ! grep -nE "^[^#]*$1" "$CONF"
 }
 
 # Core network & interface options
@@ -43,17 +44,14 @@ run "Enables tls-crypt with key" has_directive "tls-crypt /etc/openvpn/server/th
 run "Enforces CRL verification" has_directive "crl-verify /etc/openvpn/server/the-store/crl.pem"
 run "Requires the client certificate purpose (remote-cert-tls client)" has_directive "remote-cert-tls client"
 
-does_not_push_redirect_gateway() {
-    ! grep -nE '^[^#]*redirect-gateway' "$CONF"
-}
-
-run "Does not redirect the clients' default gateway (split tunnel)" does_not_push_redirect_gateway
+run "Does not redirect the clients' default gateway (split tunnel)" lacks redirect-gateway
 
 # Routing and access control
 run "Configures client-config-dir (ccd)" has_directive "client-config-dir /etc/openvpn/server/the-store/ccd"
 run "Routes branch LAN 172.16.20.0/24" has_directive "route 172.16.20.0 255.255.255.0"
-run "Pushes split-DNS server 10.8.0.1" has_directive_exact 'push "dhcp-option DNS 10.8.0.1"'
-run "Pushes domain the-store.internal" has_directive_exact 'push "dhcp-option DOMAIN the-store.internal"'
+run "Pushes split-DNS server 10.8.0.1" has_directive 'push "dns server 0 address 10.8.0.1"'
+run "Sends only the-store.internal to it" has_directive 'push "dns server 0 resolve-domains the-store.internal"'
+run "Does not set the DNS of the adapter" lacks '(dhcp-option|search-domains)'
 
 # Management interface for session termination (CU4)
 run "Configures management interface on a Unix socket" has_directive "management /run/openvpn-server/the-store.sock unix"
