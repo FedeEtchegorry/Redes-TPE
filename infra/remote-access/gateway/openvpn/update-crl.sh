@@ -14,6 +14,22 @@ fail() {
     exit 1
 }
 
+# management COMMAND: prints the response to COMMAND, up to its SUCCESS, ERROR or END line.
+# quit is sent only then, because OpenVPN drops a pending response when it closes.
+management() {
+    local line pid
+    coproc SOCKET { socat - "UNIX-CONNECT:$MANAGEMENT_SOCKET"; }
+    pid=$SOCKET_PID
+    printf '%s\n' "$1" >&"${SOCKET[1]}"
+    while IFS= read -r -t 5 line <&"${SOCKET[0]}"; do
+        line=${line%$'\r'}
+        echo "$line"
+        [[ $line == SUCCESS:* || $line == ERROR:* || $line == END ]] && break
+    done
+    printf 'quit\n' >&"${SOCKET[1]}"
+    wait "$pid"
+}
+
 # crl_date FILE FIELD: the lastupdate or nextupdate date of FILE, in seconds.
 crl_date() {
     date -d "$(openssl crl -in "$1" -noout "-$2" | cut -d= -f2)" +%s
@@ -43,7 +59,7 @@ echo "CRL installed"
 # Only after the CRL is in place, so that the reconnection of a killed client is rejected.
 # kill ends every session of that name and no other.
 for NAME in "$@"; do
-    RESPONSE=$(printf 'kill %s\nquit\n' "$NAME" | socat -t 5 - "UNIX-CONNECT:$MANAGEMENT_SOCKET")
+    RESPONSE=$(management "kill $NAME")
     if grep -q '^SUCCESS: common name' <<< "$RESPONSE"; then
         echo "$NAME: session ended"
     elif grep -q "^ERROR: common name '$NAME' not found" <<< "$RESPONSE"; then

@@ -152,9 +152,24 @@ run "dev-01 cannot send with the sysadmin address 10.8.0.20" spoofed_source_drop
 MANAGEMENT_SOCKET=/run/openvpn-server/the-store.sock
 CRL=$WORK/ca/pki/crl.pem
 
-management() { printf '%s\nquit\n' "$1" | socat -t 5 - "UNIX-CONNECT:$MANAGEMENT_SOCKET"; }
+# Same as in update-crl.sh: quit only after the response, which OpenVPN drops when it closes.
+management() {
+    local line pid
+    coproc SOCKET { socat - "UNIX-CONNECT:$MANAGEMENT_SOCKET"; }
+    pid=$SOCKET_PID
+    printf '%s\n' "$1" >&"${SOCKET[1]}"
+    while IFS= read -r -t 5 line <&"${SOCKET[0]}"; do
+        line=${line%$'\r'}
+        echo "$line"
+        [[ $line == SUCCESS:* || $line == ERROR:* || $line == END ]] && break
+    done
+    printf 'quit\n' >&"${SOCKET[1]}"
+    wait "$pid"
+}
 
-connected() { management "status 2" | grep -q "^CLIENT_LIST,$1,"; }
+# Not grep -q: management must read the whole response and quit, since the interface takes one
+# client at a time.
+connected() { management "status 2" | grep "^CLIENT_LIST,$1," > /dev/null; }
 
 both_connected() { connected dev-01 && connected admin-01; }
 
