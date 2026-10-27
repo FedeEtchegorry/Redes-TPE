@@ -98,8 +98,7 @@ start_server() {
     sed "s#/etc/openvpn/server/the-store#$WORK/bundle#" "$CONF" > "$WORK/bundle/server.conf"
     chmod 755 "$WORK"
     mkdir -p /run/openvpn-server
-    # verb 4 logs the packets dropped for their source address.
-    openvpn --config "$WORK/bundle/server.conf" --verb 4 --daemon --log "$WORK/server.log" \
+    openvpn --config "$WORK/bundle/server.conf" --verb 4 --disable-dco --daemon --log "$WORK/server.log" \
         --writepid "$WORK/server.pid" &&
         wait_for "Initialization Sequence Completed" "$WORK/server.log" &&
         ip -4 addr show dev tun0 | grep -q "inet 10\.8\.0\.1/24"
@@ -111,7 +110,7 @@ connect_dev_01() {
         ip link add the-store-wan type veth peer name eth0 netns "$DEV_NS" &&
         ip addr add 203.0.113.1/24 dev the-store-wan && ip link set the-store-wan up &&
         ip -n "$DEV_NS" addr add 203.0.113.50/24 dev eth0 && ip -n "$DEV_NS" link set eth0 up &&
-        ip netns exec "$DEV_NS" openvpn --config "$WORK/dev-01.ovpn" --daemon --log "$WORK/dev-01.log" \
+        ip netns exec "$DEV_NS" openvpn --config "$WORK/dev-01.ovpn" --disable-dco --daemon --log "$WORK/dev-01.log" \
             --writepid "$WORK/dev-01.pid" &&
         wait_for "Initialization Sequence Completed" "$WORK/dev-01.log"
 }
