@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests gateway/openvpn/server.conf: checks its directives, then runs it with the bundle of
-# scripts/pki.sh, connects clients and revokes one of them. Run with sudo; requires EasyRSA 3,
-# ping and socat.
+# scripts/pki.sh, connects clients, checks what a scan and a capture see (CU1, CU5) and revokes
+# one of them. Run with sudo; requires EasyRSA 3, ping, socat and tcpdump.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -67,6 +67,8 @@ run "Drops root to nobody:nogroup" has_directive "user nobody"
 WORK=
 GATEWAY_IP=203.0.113.10   # remote of clients/client.conf
 DEV_NS=the-store-dev      # network namespace of dev-01
+INGRESS_IP=10.10.10.5     # the node is the gateway itself here, so requests end at tun0
+MARKER=the-store-probe-$$ # payload of the request, looked for in the captures
 
 cleanup() {
     local pid
@@ -77,6 +79,7 @@ cleanup() {
     done
     ip netns delete "$DEV_NS" 2>/dev/null
     ip addr del "$GATEWAY_IP/32" dev lo 2>/dev/null
+    ip addr del "$INGRESS_IP/32" dev lo 2>/dev/null
     rm -rf "$WORK"
 }
 
@@ -132,9 +135,68 @@ spoofed_source_dropped() {
         wait_for "bad source address from client \[$1\], packet dropped" "$WORK/server.log"
 }
 
+# capture INTERFACE FILE: IPv4 only (the veth links carry IPv6 announcements). --immediate-mode:
+# otherwise the kernel batches the packets and the INT right after the request loses them.
+capture() {
+    tcpdump -i "$1" -n -U --immediate-mode -Z root -w "$2" ip 2> /dev/null &
+    echo "$!" > "$WORK/tcpdump-$1.pid"
+}
+
+stop_captures() {
+    local pids
+    sleep 0.5
+    pids=$(cat "$WORK"/tcpdump-*.pid)
+    # shellcheck disable=SC2086 # one word per pid
+    kill -INT $pids && wait $pids
+    rm "$WORK"/tcpdump-*.pid
+}
+
+# reaches_ingress: dev-01 sends MARKER to the Ingress through the tunnel and gets the answer.
+reaches_ingress() {
+    local answer
+    answer=$(ip netns exec "$DEV_NS" socat -T2 -t2 - "TCP4:$INGRESS_IP:80,connect-timeout=2" <<< "$MARKER") || return 1
+    echo "answer: $answer"
+    [[ $answer == ok ]]
+}
+
+# only_openvpn_packets FILE: every packet is UDP between dev-01 and port 1194 of the gateway,
+# and none carries MARKER in clear.
+only_openvpn_packets() {
+    local packets others
+    packets=$(tcpdump -n -r "$1" 2> /dev/null)
+    head -n 5 <<< "$packets"
+    [[ -n $packets ]] || { echo "No packet captured"; return 1; }
+    others=$(grep -vE " IP (203\.0\.113\.50\.[0-9]+ > $GATEWAY_IP\.1194|$GATEWAY_IP\.1194 > 203\.0\.113\.50\.[0-9]+): UDP" <<< "$packets")
+    [[ -z $others ]] || { echo "Other packets:"; echo "$others"; return 1; }
+    ! grep -qaF "$MARKER" "$1" || { echo "The request is in clear"; return 1; }
+}
+
+# clear_in_tunnel FILE: the request of dev-01 to the Ingress, in clear once the gateway decrypts it.
+clear_in_tunnel() {
+    local packets
+    packets=$(tcpdump -n -A -r "$1" 2> /dev/null)
+    head -n 3 <<< "$packets"
+    grep -qE " IP 10\.8\.0\.10\.[0-9]+ > $INGRESS_IP\.80: " <<< "$packets" && grep -qF "$MARKER" <<< "$packets"
+}
+
+# reply_size PORT: bytes that PORT of the gateway answers to the first packet of an OpenVPN client
+# (P_CONTROL_HARD_RESET_CLIENT_V2) sent without the tls-crypt key; a server without tls-crypt
+# answers 26 (checked by hand). Fails on an ICMP error.
+reply_size() {
+    printf '\x38\x01\x02\x03\x04\x05\x06\x07\x08\x00\x00\x00\x00\x00' |
+        ip netns exec "$DEV_NS" socat -T2 -t2 - "UDP4:$GATEWAY_IP:$1" | wc -c
+}
+
+# Silent, like a filtered port: no answer and no ICMP error, so a UDP scan learns nothing.
+unanswered() { local size; size=$(reply_size "$1") && [[ $size == 0 ]]; }
+answered() { local size; size=$(reply_size "$1") && (( size > 0 )); }
+
+# cleanup deletes this address, so it must not be one that was already there (a running cluster).
+[[ $(ip -4 addr show dev lo) != *" $INGRESS_IP/"* ]] || { echo "$INGRESS_IP is already on lo"; exit 1; }
 WORK=$(mktemp -d)
 trap cleanup EXIT
 ip addr add "$GATEWAY_IP/32" dev lo
+ip addr add "$INGRESS_IP/32" dev lo
 run "pki.sh issues the certificates and exports the gateway bundle" issue_certificates
 run "OpenVPN server starts with the bundle (tun0 is 10.8.0.1/24)" start_server
 run "dev-01 connects from the untrusted segment" connect_dev_01
@@ -147,6 +209,24 @@ run "dev-01 gets its fixed IP 10.8.0.10 from its CCD" grep -q "MULTI: Learn: 10.
 run "A valid certificate without a CCD file is rejected (ccd-exclusive)" grep -q "authentication failed for common name 'rogue'" "$WORK/server.log"
 run "dev-01 routes only the node 10.10.10.5 through the tunnel (split tunnel)" routes_only_the_node
 run "dev-01 cannot send with the sysadmin address 10.8.0.20" spoofed_source_dropped 10.8.0.20
+
+# CU5: the Ingress answers on the node address.
+socat "TCP4-LISTEN:80,bind=$INGRESS_IP,reuseaddr,fork" SYSTEM:'echo ok' 2> /dev/null &
+echo "$!" > "$WORK/ingress.pid"
+capture the-store-wan "$WORK/wan.pcap"
+capture tun0 "$WORK/tunnel.pcap"
+sleep 1
+run "dev-01 reaches the Ingress through the tunnel" reaches_ingress
+stop_captures
+run "On the untrusted segment the request is only OpenVPN on UDP 1194, not in clear" \
+    only_openvpn_packets "$WORK/wan.pcap"
+run "On tun0 of the gateway the request arrives in clear from 10.8.0.10" clear_in_tunnel "$WORK/tunnel.pcap"
+
+# CU1: a scan of UDP 1194 learns nothing, and the same probe does get an answer from the control server.
+socat "UDP4-RECVFROM:1196,bind=$GATEWAY_IP,fork" SYSTEM:'echo pong' 2> /dev/null &
+echo "$!" > "$WORK/control.pid"
+run "OpenVPN gives no answer to a handshake without the tls-crypt key" unanswered 1194
+run "A UDP server on another port does answer the same packet (control)" answered 1196
 
 # Revocation (CU4): a second user stays connected while dev-01 is revoked.
 MANAGEMENT_SOCKET=/run/openvpn-server/the-store.sock

@@ -60,7 +60,7 @@ jobs:
 
     - name: Test OpenVPN server configuration
       run: |
-        sudo apt-get install --yes socat
+        sudo apt-get install --yes socat tcpdump
         sudo bash infra/remote-access/tests/openvpn.sh
 
     - name: Test nftables ruleset
