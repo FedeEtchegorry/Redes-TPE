@@ -29,6 +29,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # Test runner for local test execution: run-all.sh
     - name: Check that every test is run
       run: |
         for test in infra/remote-access/tests/*; do

@@ -1,0 +1,19 @@
+# Installed as /etc/netplan/90-the-store.yaml on cli-adm by provision/cli-adm.sh, which puts
+# the MAC address of its interface. cli-adm is on the untrusted Internet segment (203.0.113.0/24).
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "@ETH0_MAC@"
+      set-name: eth0
+      dhcp4: false
+      addresses:
+        - 203.0.113.51/24
+      routes:
+        - to: default
+          via: 203.0.113.1
+      nameservers:
+        addresses:
+          - 1.1.1.1
+          - 8.8.8.8

@@ -1,0 +1,20 @@
+# Installed as /etc/netplan/90-the-store.yaml on k8s-node by provision/k8s-node.sh, which puts
+# the MAC address of its interface. k8s-node is on the internal LAN (10.10.0.0/16) and uses
+# gw-vpn (10.10.0.1) as its default gateway.
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "@ETH0_MAC@"
+      set-name: eth0
+      dhcp4: false
+      addresses:
+        - 10.10.10.5/16
+      routes:
+        - to: default
+          via: 10.10.0.1
+      nameservers:
+        addresses:
+          - 1.1.1.1
+          - 8.8.8.8

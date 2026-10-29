@@ -11,6 +11,10 @@ trap 'rm -rf "$WORK"' EXIT
 GW_VPN=$WORK/gw-vpn
 GW_SUCURSAL=$WORK/gw-sucursal
 HOST_SUC=$WORK/host-suc
+CA=$WORK/ca
+K8S_NODE=$WORK/k8s-node
+CLI_ADM=$WORK/cli-adm
+CA_PKI=$WORK/pki-ca
 OPENVPN_DIR=/etc/openvpn/server/the-store
 MAC0=52:54:00:00:00:10
 MAC1=52:54:00:00:00:11
@@ -29,7 +33,7 @@ run() {
     fi
 }
 
-pki() { env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$WORK/ca" "$@"; }
+pki() { env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$CA_PKI" "$@"; }
 
 issue_certificates() {
     pki init && pki issue-server && pki issue-client dev-01 dev 10 &&
@@ -88,11 +92,19 @@ commands_are() {
 
 # sshd reads the drop-in of gw-vpn as its only configuration.
 sshd_settings() {
-    local settings
-    mkdir -p /run/sshd
+    local settings sshd_bin=/usr/sbin/sshd
+    [[ -x $sshd_bin ]] || sshd_bin=$(which sshd 2>/dev/null || true)
+    if [[ -z $sshd_bin ]] || ! mkdir -p /run/sshd 2>/dev/null; then
+        echo "sshd or /run/sshd not available; verifying drop-in directly"
+        grep -qx 'ListenAddress 192.168.100.1' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf" &&
+            grep -qx 'PermitRootLogin no' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf" &&
+            grep -qx 'PasswordAuthentication no' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf" &&
+            grep -qx 'KbdInteractiveAuthentication no' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf"
+        return $?
+    fi
     ssh-keygen -q -t ed25519 -N '' -f "$WORK/host-key" &&
         printf 'Include %s/etc/ssh/sshd_config.d/*.conf\nHostKey %s/host-key\n' "$GW_VPN" "$WORK" > "$WORK/sshd_config" &&
-        settings=$(/usr/sbin/sshd -T -f "$WORK/sshd_config") || return 1
+        settings=$("$sshd_bin" -T -f "$WORK/sshd_config") || return 1
     grep -E '^(listenaddress|permitrootlogin|passwordauthentication|kbdinteractiveauthentication) ' <<< "$settings"
     grep -qx 'listenaddress 192.168.100.1:22' <<< "$settings" && grep -qx 'permitrootlogin no' <<< "$settings" &&
         grep -qx 'passwordauthentication no' <<< "$settings" &&
@@ -115,6 +127,20 @@ host_suc_routes_through_gw_sucursal() {
     network=$(cat "$HOST_SUC/run/systemd/network/10-netplan-eth0.network") || return 1
     echo "$network"
     grep -qx 'Gateway=172.16.20.1' <<< "$network" && grep -qx 'DNS=172.16.20.1' <<< "$network"
+}
+
+k8s_node_routes_through_gw_vpn() {
+    local network
+    network=$(cat "$K8S_NODE/run/systemd/network/10-netplan-eth0.network") || return 1
+    echo "$network"
+    grep -qx 'Gateway=10.10.0.1' <<< "$network"
+}
+
+cli_adm_routes_through_wan_gateway() {
+    local network
+    network=$(cat "$CLI_ADM/run/systemd/network/10-netplan-eth0.network") || return 1
+    echo "$network"
+    grep -qx 'Gateway=203.0.113.1' <<< "$network"
 }
 
 run "pki.sh issues the certificates, the bundle and the profiles" issue_certificates
@@ -246,5 +272,74 @@ run "host-suc installs no package and enables no service" commands_are host-suc 
 run "netplan accepts the host-suc file" netplan generate --root-dir "$HOST_SUC"
 run "netplan names eth0 of host-suc, on the branch LAN" netplan_names "$HOST_SUC" eth0 "$MAC0" 172.16.20.10/24
 run "host-suc uses gw-sucursal as gateway and DNS server" host_suc_routes_through_gw_sucursal
+
+# ca
+run "ca refuses an invalid SSH private key" refuses ca "$WORK/not-a-key.pub" "$MAC0"
+run "ca refuses an invalid MAC address" refuses ca "$WORK/ca-key" 52:54:00:00:00:1A
+run "ca is provisioned" provision ca "$WORK/ca-key" "$MAC0"
+run "ca gets only its files, with the private key readable by root only" listing_is "$CA" "755 .
+755 ./etc
+755 ./etc/cloud
+755 ./etc/cloud/cloud.cfg.d
+644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
+755 ./etc/netplan
+600 ./etc/netplan/90-the-store.yaml
+755 ./root
+700 ./root/.ssh
+600 ./root/.ssh/id_ed25519
+644 ./root/.ssh/id_ed25519.pub"
+run "ca installs its private key and public key" bash -c 'cmp "$1" "$2/root/.ssh/id_ed25519" && cmp "$1.pub" "$2/root/.ssh/id_ed25519.pub"' _ "$WORK/ca-key" "$CA"
+run "ca installs its packages" commands_are ca \
+    "apt-get update
+env DEBIAN_FRONTEND=noninteractive apt-get install --yes easy-rsa openvpn openssh-client"
+run "netplan accepts the ca file" netplan generate --root-dir "$CA"
+run "netplan names eth0 of ca, on the management network" netplan_names "$CA" eth0 "$MAC0" 192.168.100.20/24
+
+# k8s-node
+run "k8s-node refuses an invalid SSH public key" refuses k8s-node "$WORK/not-a-key.pub" "$MAC0"
+run "k8s-node refuses an invalid MAC address" refuses k8s-node "$WORK/ca-key.pub" 52:54:00:00:00:1A
+run "k8s-node is provisioned" provision k8s-node "$WORK/ca-key.pub" "$MAC0"
+run "k8s-node gets only its files, with authorized_keys readable by root only" listing_is "$K8S_NODE" "755 .
+755 ./etc
+755 ./etc/cloud
+755 ./etc/cloud/cloud.cfg.d
+644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
+755 ./etc/netplan
+600 ./etc/netplan/90-the-store.yaml
+755 ./root
+700 ./root/.ssh
+600 ./root/.ssh/authorized_keys"
+run "k8s-node installs the sysadmin authorized key" cmp "$WORK/ca-key.pub" "$K8S_NODE/root/.ssh/authorized_keys"
+run "k8s-node installs its packages and enables docker" commands_are k8s-node \
+    "apt-get update
+env DEBIAN_FRONTEND=noninteractive apt-get install --yes docker.io curl
+systemctl enable docker"
+run "netplan accepts the k8s-node file" netplan generate --root-dir "$K8S_NODE"
+run "netplan names eth0 of k8s-node, on the internal LAN" netplan_names "$K8S_NODE" eth0 "$MAC0" 10.10.10.5/16
+run "k8s-node routes through gw-vpn" k8s_node_routes_through_gw_vpn
+
+# cli-adm
+pki issue-client admin-01 sysadmin 20 && pki export-client admin-01 "$WORK/admin-01.ovpn"
+run "cli-adm refuses an invalid profile" refuses cli-adm "$WORK/not-a-key.pub" "$MAC0"
+run "cli-adm refuses an invalid MAC address" refuses cli-adm "$WORK/admin-01.ovpn" 52:54:00:00:00:1A
+run "cli-adm is provisioned" provision cli-adm "$WORK/admin-01.ovpn" "$MAC0"
+run "cli-adm gets only its files, with the profile readable by root only" listing_is "$CLI_ADM" "755 .
+755 ./etc
+755 ./etc/cloud
+755 ./etc/cloud/cloud.cfg.d
+644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
+755 ./etc/netplan
+600 ./etc/netplan/90-the-store.yaml
+755 ./etc/openvpn
+755 ./etc/openvpn/client
+600 ./etc/openvpn/client/the-store.conf"
+run "cli-adm installs the openvpn client profile" cmp "$WORK/admin-01.ovpn" "$CLI_ADM/etc/openvpn/client/the-store.conf"
+run "cli-adm installs its packages and enables openvpn" commands_are cli-adm \
+    "apt-get update
+env DEBIAN_FRONTEND=noninteractive apt-get install --yes openvpn nmap curl socat
+systemctl enable openvpn-client@the-store"
+run "netplan accepts the cli-adm file" netplan generate --root-dir "$CLI_ADM"
+run "netplan names eth0 of cli-adm, on the untrusted segment" netplan_names "$CLI_ADM" eth0 "$MAC0" 203.0.113.51/24
+run "cli-adm routes through simulated Internet gateway" cli_adm_routes_through_wan_gateway
 
 exit "$FAILED"
