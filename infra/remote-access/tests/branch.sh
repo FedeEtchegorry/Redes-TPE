@@ -133,8 +133,9 @@ answers_status() {
 }
 
 # capture NS INTERFACE FILE: IPv4 packets only; the veth links also carry IPv6 announcements.
+
 capture() {
-    ip netns exec "branch-$1" tcpdump -i "$2" -n -U -Z root -w "$3" ip 2> /dev/null &
+    ip netns exec "branch-$1" tcpdump -i "$2" -n -U --immediate-mode -Z root -w "$3" ip 2> /dev/null &
     CAPTURES+=("$!")
     PIDS+=("$!")
 }
