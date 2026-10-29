@@ -102,8 +102,16 @@ ns management ip route add 10.10.0.0/16 via 192.168.100.1
 # Lets the LAN try connections into the tunnel; seen_as checks the SNAT.
 ns lan ip route add 10.8.0.0/24 via 10.10.0.1
 
-run "Has flush ruleset" grep -q "^flush ruleset" "$CONF"
+reload_replaces_the_ruleset() {
+    local loaded
+    loaded=$(ns gw nft list ruleset) &&
+        ns gw nft add table inet leftover &&
+        ns gw nft --file "$CONF" &&
+        [[ $(ns gw nft list ruleset) == "$loaded" ]]
+}
+
 run "The ruleset loads on a gateway with eth0, eth1, eth2 and tun0" ns gw nft --file "$CONF"
+run "Loading the ruleset again replaces it instead of adding to it" reload_replaces_the_ruleset
 
 for port in 22 80 6443; do listen lan tcp 10.10.10.5 "$port"; done
 listen gw tcp 0.0.0.0 22
@@ -143,11 +151,13 @@ for port in 80 22 6443; do
     run "sysadmin reaches the node on $port" seen_as 10.10.0.1 tunnel 10.8.0.20 10.10.10.5 tcp "$port"
 done
 run "sysadmin cannot reach SSH on the gateway" blocked tunnel 10.8.0.20 10.8.0.1 tcp 22
+run "sysadmin cannot reach the management network" blocked tunnel 10.8.0.20 192.168.100.20 tcp 22
 
 # CU6: the branch LAN behind gw-sucursal (10.8.0.30) only reaches the Ingress.
 run "Branch host reaches the Ingress" seen_as 10.10.0.1 tunnel 172.16.20.10 10.10.10.5 tcp 80
 run "Branch host cannot reach the API server" blocked tunnel 172.16.20.10 10.10.10.5 tcp 6443
 run "Branch host cannot reach SSH on the node" blocked tunnel 172.16.20.10 10.10.10.5 tcp 22
+run "Branch host cannot reach the management network" blocked tunnel 172.16.20.10 192.168.100.20 tcp 22
 run "gw-sucursal reaches dnsmasq to forward the branch queries" reaches tunnel 10.8.0.30 10.8.0.1 udp 53
 
 # Management network and LAN.

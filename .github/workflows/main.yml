@@ -20,6 +20,61 @@ on:
   workflow_dispatch:
 
 jobs:
+  coverage:
+    name: Every test is run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check that every test is run
+      run: |
+        for test in infra/remote-access/tests/*; do
+          grep -q "$(basename "$test")" .github/workflows/*.yml ||
+            { echo "::error::$test is not run by any workflow"; exit 1; }
+        done
+
+  network:
+    name: ${{ matrix.test }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test: dnsmasq.sh
+            packages: dnsmasq-base bind9-dnsutils
+            run: bash
+          - test: pki.sh
+            packages: easy-rsa openvpn
+            run: bash
+          - test: openvpn.sh
+            packages: easy-rsa openvpn socat tcpdump
+            run: sudo bash
+          - test: nftables.sh
+            packages: nftables socat
+            run: sudo bash
+          - test: branch.sh
+            packages: easy-rsa openvpn nftables dnsmasq-base bind9-dnsutils socat tcpdump
+            run: sudo bash
+          - test: provision.sh
+            packages: easy-rsa openvpn openssh-server netplan.io
+            run: sudo bash
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install what the test requires
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes ${{ matrix.packages }}
+
+    - name: Run the test
+      run: ${{ matrix.run }} infra/remote-access/tests/${{ matrix.test }}
+
   deploy:
     strategy:
       matrix:
@@ -32,13 +87,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Check that every test is run
-      run: |
-        for test in infra/remote-access/tests/*; do
-          grep -q "$(basename "$test")" .github/workflows/main.yml ||
-            { echo "::error::$test is not run by this workflow"; exit 1; }
-        done
-
     - name: Set up Docker
       uses: docker/setup-docker-action@v4
 
@@ -46,37 +94,6 @@ jobs:
       uses: helm/kind-action@v1
       with:
         install_only: true
-
-    - name: Test dnsmasq configuration
-      run: |
-        sudo apt-get update
-        sudo apt-get install --yes dnsmasq-base bind9-dnsutils
-        bash infra/remote-access/tests/dnsmasq.sh
-
-    - name: Test PKI scripts
-      run: |
-        sudo apt-get install --yes easy-rsa openvpn
-        bash infra/remote-access/tests/pki.sh
-
-    - name: Test OpenVPN server configuration
-      run: |
-        sudo apt-get install --yes socat tcpdump
-        sudo bash infra/remote-access/tests/openvpn.sh
-
-    - name: Test nftables ruleset
-      run: |
-        sudo apt-get install --yes nftables socat
-        sudo bash infra/remote-access/tests/nftables.sh
-
-    - name: Test the branch gateway (site-to-site)
-      run: |
-        sudo apt-get install --yes tcpdump
-        sudo bash infra/remote-access/tests/branch.sh
-
-    - name: Test the provisioning scripts
-      run: |
-        sudo apt-get install --yes openssh-server netplan.io
-        sudo bash infra/remote-access/tests/provision.sh
 
     - name: Create Kind cluster and deploy services
       run: |

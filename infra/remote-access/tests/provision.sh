@@ -188,7 +188,8 @@ run "netplan names eth1 of gw-vpn, on the LAN" netplan_names "$GW_VPN" eth1 "$MA
 run "netplan names eth2 of gw-vpn, on the management network" netplan_names "$GW_VPN" eth2 "$MAC2" 192.168.100.1/24
 
 # A new bundle after a revocation: its CCD files replace the installed ones, its CRL does not.
-pki revoke dev-01 > /dev/null 2>&1 && pki export-server "$WORK/bundle-2" > /dev/null 2>&1
+new_bundle_after_revocation() { pki revoke dev-01 && pki export-server "$WORK/bundle-2"; }
+run "pki.sh revokes dev-01 and exports a new bundle" new_bundle_after_revocation
 run "gw-vpn is provisioned again with a new bundle" provision gw-vpn "$WORK/bundle-2" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
 run "The CCD files are those of the new bundle" bash -c '[[ $(ls "$1") == gw-sucursal ]]' _ "$GW_VPN$OPENVPN_DIR/ccd"
 run "The installed CRL is kept, since only publish-crl replaces it" \

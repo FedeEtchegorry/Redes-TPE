@@ -286,7 +286,7 @@ run "The new CRL is more recent" crl_renewed_after "$CRL_LAST_UPDATE"
 run "The new CRL is valid for 30 days again" crl_expires_in_days 30
 run "The new CRL still rejects dev-01" crl_rejects dev-01
 
-run "publish-crl copies the CRL to gw-vpn and ends the dev-01 session there" publish_crl dev-01
+run "publish-crl runs for a revoked name (ssh is a stand-in)" publish_crl dev-01
 run "publish-crl refuses names that are not plain identifiers" refuses_publish_crl 'dev-01;reboot'
 run "publish-crl runs update-crl by ssh, and nothing for refused names" \
     remote_commands_are "ssh the-store-crl@192.168.100.1 sudo /usr/local/sbin/the-store-update-crl dev-01"
