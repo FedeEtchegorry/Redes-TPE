@@ -18,6 +18,7 @@ if (( ${#TEST_SCRIPTS[@]} == 0 )); then
     exit 1
 fi
 
+TEST_TIMEOUT=${TEST_TIMEOUT:-180}
 REPORT_ENTRIES=()
 TOTAL_PASSED=0
 TOTAL_FAILED=0
@@ -28,11 +29,13 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
     echo "==> Running $test_name..."
 
     output_file=$(mktemp)
-    bash "$test_file" "$@" > "$output_file" 2>&1
+    timeout "$TEST_TIMEOUT" bash "$test_file" "$@" > "$output_file" 2>&1
     status=$?
 
     passed=0
     failed=0
+    skipped=0
+    skip_reason=""
     failures=()
     cur_fail=""
     in_fail=0
@@ -53,6 +56,9 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
             (( failed++ ))
             in_fail=1
             cur_fail="  $line"
+        elif [[ $line =~ ^[[:space:]]*SKIP[[:space:]]+(.*)$ ]]; then
+            skipped=1
+            skip_reason="${BASH_REMATCH[1]}"
         elif (( in_fail )); then
             cur_fail+=$'\n'"  $line"
         fi
@@ -64,8 +70,22 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
 
     total=$(( passed + failed ))
 
-    # If script failed without emitting standard test output lines
-    if (( total == 0 )); then
+    # If script skipped, timed out, or failed without emitting standard test output lines
+    if (( skipped && total == 0 )); then
+        entry="[$test_name] - 0/0 passed, 0/0 failed (SKIPPED: ${skip_reason:-cluster offline})."$'\n'
+        entry+="Failures list: None"
+    elif (( status == 124 )); then
+        total=$(( total + 1 ))
+        failed=$(( failed + 1 ))
+        failures+=("  Test timed out after ${TEST_TIMEOUT}s")
+        entry="[$test_name] - ${passed}/${total} passed, ${failed}/${total} failed."$'\n'
+        entry+="Failures list:"$'\n'
+        for f in "${failures[@]}"; do
+            entry+="$f"$'\n'
+        done
+        entry="${entry%$'\n'}"
+        ANY_FAILURE=1
+    elif (( total == 0 )); then
         if (( status != 0 )); then
             total=1
             failed=1
@@ -74,6 +94,25 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
                 fail_desc+=$'\n'"    $line"
             done < "$output_file"
             failures+=("$fail_desc")
+            entry="[$test_name] - ${passed}/${total} passed, ${failed}/${total} failed."$'\n'
+            entry+="Failures list:"$'\n'
+            for f in "${failures[@]}"; do
+                entry+="$f"$'\n'
+            done
+            entry="${entry%$'\n'}"
+            ANY_FAILURE=1
+        fi
+    else
+        entry="[$test_name] - ${passed}/${total} passed, ${failed}/${total} failed."$'\n'
+        if (( failed > 0 )); then
+            ANY_FAILURE=1
+            entry+="Failures list:"$'\n'
+            for f in "${failures[@]}"; do
+                entry+="$f"$'\n'
+            done
+            entry="${entry%$'\n'}"
+        else
+            entry+="Failures list: None"
         fi
     fi
 
@@ -81,19 +120,6 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
 
     TOTAL_PASSED=$(( TOTAL_PASSED + passed ))
     TOTAL_FAILED=$(( TOTAL_FAILED + failed ))
-
-    entry="[$test_name] - ${passed}/${total} passed, ${failed}/${total} failed."$'\n'
-    if (( failed > 0 )); then
-        ANY_FAILURE=1
-        entry+="Failures list:"$'\n'
-        for f in "${failures[@]}"; do
-            entry+="$f"$'\n'
-        done
-        # Remove trailing newline from entry for consistent spacing
-        entry="${entry%$'\n'}"
-    else
-        entry+="Failures list: None"
-    fi
 
     REPORT_ENTRIES+=("$entry")
 done
