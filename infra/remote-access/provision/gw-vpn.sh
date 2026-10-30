@@ -16,13 +16,9 @@ OPENVPN_DIR=/etc/openvpn/server/the-store
 CRL_USER=the-store-crl
 
 # Everything is checked before anything changes.
-for FILE in ca.crt gw-vpn.crt gw-vpn.key tls-crypt.key crl.pem; do
-    [[ -f "$BUNDLE/$FILE" ]] || fail "Missing $FILE in the bundle"
-done
+check_bundle "$BUNDLE"
 ssh-keygen -l -f "$CA_KEY" > /dev/null || fail "Invalid SSH public key"
-for MAC in "$ETH0_MAC" "$ETH1_MAC" "$ETH2_MAC"; do
-    check_mac "$MAC"
-done
+check_macs "$ETH0_MAC" "$ETH1_MAC" "$ETH2_MAC"
 
 # Same modes as in the bundle: only the keys are private, since crl.pem and the CCD files are
 # read as the nobody user.

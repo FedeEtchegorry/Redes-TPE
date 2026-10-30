@@ -2,7 +2,6 @@
 # Provisions the CA VM (192.168.100.20) from a copy of the repository, as root:
 #   ca.sh CA_SSH_PRIVATE_KEY ETH0_MAC
 # CA_SSH_PRIVATE_KEY is the private SSH key used to publish the CRL to gw-vpn as the-store-crl.
-# The interface gets its name and static IP on the isolated management network.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 

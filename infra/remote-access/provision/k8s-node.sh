@@ -2,7 +2,7 @@
 # Provisions k8s-node from a copy of the repository, as root:
 #   k8s-node.sh SYSADMIN_SSH_KEY ETH0_MAC
 # SYSADMIN_SSH_KEY is the public SSH key of the sysadmin profile (authorized in CU3).
-# Installs Docker, enables SSH, and sets up static IP 10.10.10.5/16 with default route 10.10.0.1.
+# Installs Docker; the OpenSSH server must already be installed.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 

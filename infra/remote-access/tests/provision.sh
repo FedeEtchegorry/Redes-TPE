@@ -3,6 +3,7 @@
 # commands they would run, then validates the files with sshd, visudo and netplan. Run with
 # sudo; requires EasyRSA 3, OpenVPN, the OpenSSH server, sudo and netplan.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 umask 022
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -19,19 +20,14 @@ OPENVPN_DIR=/etc/openvpn/server/the-store
 MAC0=52:54:00:00:00:10
 MAC1=52:54:00:00:00:11
 MAC2=52:54:00:00:00:12
-FAILED=0
-
-run() {
-    local description=$1 output line
-    shift
-    if output=$("$@" 2>&1); then
-        echo "ok    $description"
-    else
-        echo "FAIL  $description"
-        while IFS= read -r line; do echo "      $line"; done <<< "$output"
-        FAILED=1
-    fi
-}
+# What every host gets: its netplan file and the cloud-init setting that disables cloud-init's network.
+BASE_LISTING="755 .
+755 ./etc
+755 ./etc/cloud
+755 ./etc/cloud/cloud.cfg.d
+644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
+755 ./etc/netplan
+600 ./etc/netplan/90-the-store.yaml"
 
 pki() { env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$CA_PKI" "$@"; }
 
@@ -53,7 +49,7 @@ provision() {
 
 # refuses NAME ARGUMENT...: provision/NAME.sh fails and writes nothing.
 refuses() {
-    local destdir=$WORK/refused
+    local destdir=$WORK/refused-$BASHPID
     ! DESTDIR=$destdir bash "$ROOT/provision/$1.sh" "${@:2}" && [[ ! -e $destdir ]]
 }
 
@@ -92,16 +88,9 @@ commands_are() {
 
 # sshd reads the drop-in of gw-vpn as its only configuration.
 sshd_settings() {
-    local settings sshd_bin=/usr/sbin/sshd
-    [[ -x $sshd_bin ]] || sshd_bin=$(which sshd 2>/dev/null || true)
-    if [[ -z $sshd_bin ]] || ! mkdir -p /run/sshd 2>/dev/null; then
-        echo "sshd or /run/sshd not available; verifying drop-in directly"
-        grep -qx 'ListenAddress 192.168.100.1' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf" &&
-            grep -qx 'PermitRootLogin no' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf" &&
-            grep -qx 'PasswordAuthentication no' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf" &&
-            grep -qx 'KbdInteractiveAuthentication no' "$GW_VPN/etc/ssh/sshd_config.d/10-the-store.conf"
-        return $?
-    fi
+    local settings sshd_bin
+    sshd_bin=$(command -v sshd || echo /usr/sbin/sshd)
+    mkdir -p /run/sshd
     ssh-keygen -q -t ed25519 -N '' -f "$WORK/host-key" &&
         printf 'Include %s/etc/ssh/sshd_config.d/*.conf\nHostKey %s/host-key\n' "$GW_VPN" "$WORK" > "$WORK/sshd_config" &&
         settings=$("$sshd_bin" -T -f "$WORK/sshd_config") || return 1
@@ -151,16 +140,47 @@ mkdir "$WORK/empty-bundle"
 run "gw-vpn refuses an incomplete bundle" refuses gw-vpn "$WORK/empty-bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
 run "gw-vpn refuses an invalid SSH key" refuses gw-vpn "$WORK/bundle" "$WORK/not-a-key.pub" "$MAC0" "$MAC1" "$MAC2"
 run "gw-vpn refuses an invalid MAC address" refuses gw-vpn "$WORK/bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" 52:54:00:00:00:1Z
+run "gw-vpn refuses repeated MAC addresses" refuses gw-vpn "$WORK/bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC0" "$MAC2"
+
+cp -a "$WORK/bundle" "$WORK/no-clients-bundle"
+rm "$WORK/no-clients-bundle/ccd/"*
+run "gw-vpn refuses a bundle without clients, which would lock every client out" \
+    refuses gw-vpn "$WORK/no-clients-bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
+
+# Cryptographically incorrect but complete bundles must fail before writing any destination.
+cp -a "$WORK/bundle" "$WORK/client-certificate-bundle"
+cp "$CA_PKI/pki/issued/dev-01.crt" "$WORK/client-certificate-bundle/gw-vpn.crt"
+run "gw-vpn refuses a client certificate as its server certificate" \
+    refuses gw-vpn "$WORK/client-certificate-bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
+cp -a "$WORK/bundle" "$WORK/mismatched-key-bundle"
+cp "$CA_PKI/pki/private/dev-01.key" "$WORK/mismatched-key-bundle/gw-vpn.key"
+run "gw-vpn refuses a private key that does not match its certificate" \
+    refuses gw-vpn "$WORK/mismatched-key-bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
+env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$WORK/other-ca" init > /dev/null 2>&1
+cp -a "$WORK/bundle" "$WORK/other-crl-bundle"
+cp "$WORK/other-ca/pki/crl.pem" "$WORK/other-crl-bundle/crl.pem"
+run "gw-vpn refuses a CRL signed by another CA" \
+    refuses gw-vpn "$WORK/other-crl-bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
+mkdir "$WORK/clock"
+cat > "$WORK/clock/date" <<'EOF'
+#!/bin/bash
+if [[ $# == 1 && $1 == +%s ]]; then
+    echo "$THE_STORE_TEST_NOW"
+else
+    exec /usr/bin/date "$@"
+fi
+EOF
+chmod +x "$WORK/clock/date"
+refuses_at_time() { THE_STORE_TEST_NOW=$1 PATH="$WORK/clock:$PATH" refuses "${@:2}"; }
+run "gw-vpn refuses a bundle CRL dated in the future" \
+    refuses_at_time 0 gw-vpn "$WORK/bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
+CRL_EXPIRY=$(date -d "$(openssl crl -in "$WORK/bundle/crl.pem" -noout -nextupdate | cut -d= -f2)" +%s)
+run "gw-vpn refuses an expired bundle CRL" \
+    refuses_at_time "$((CRL_EXPIRY + 1))" gw-vpn "$WORK/bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
 run "gw-vpn is provisioned" provision gw-vpn "$WORK/bundle" "$WORK/ca-key.pub" "$MAC0" "$MAC1" "$MAC2"
-run "gw-vpn gets only its files, with private keys readable by root only" listing_is "$GW_VPN" "755 .
-755 ./etc
-755 ./etc/cloud
-755 ./etc/cloud/cloud.cfg.d
-644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
+run "gw-vpn gets only its files, with private keys readable by root only" listing_is "$GW_VPN" "$BASE_LISTING
 755 ./etc/dnsmasq.d
 644 ./etc/dnsmasq.d/the-store.conf
-755 ./etc/netplan
-600 ./etc/netplan/90-the-store.yaml
 755 ./etc/nftables.conf
 755 ./etc/openvpn
 755 ./etc/openvpn/server
@@ -202,7 +222,7 @@ run "The CA can log in as the-store-crl with its key" \
     cmp "$WORK/ca-key.pub" "$GW_VPN/home/the-store-crl/.ssh/authorized_keys"
 run "gw-vpn installs its packages, creates the-store-crl and enables its services" commands_are gw-vpn \
     "apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install --yes openvpn nftables dnsmasq socat
+env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes openvpn nftables dnsmasq socat
 useradd --system --create-home --shell /bin/bash the-store-crl
 chown -R the-store-crl: /home/the-store-crl/.ssh
 systemctl enable nftables dnsmasq openvpn-server@the-store"
@@ -224,16 +244,11 @@ run "The installed CRL is kept, since only publish-crl replaces it" \
 # gw-sucursal
 run "gw-sucursal refuses the profile of another client" refuses gw-sucursal "$WORK/dev-01.ovpn" "$MAC0" "$MAC1"
 run "gw-sucursal refuses an invalid MAC address" refuses gw-sucursal "$WORK/gw-sucursal.ovpn" "$MAC0" 52:54:00:00:00
+run "gw-sucursal refuses repeated MAC addresses" refuses gw-sucursal "$WORK/gw-sucursal.ovpn" "$MAC0" "$MAC0"
 run "gw-sucursal is provisioned" provision gw-sucursal "$WORK/gw-sucursal.ovpn" "$MAC0" "$MAC1"
-run "gw-sucursal gets only its files, with the profile readable by root only" listing_is "$GW_SUCURSAL" "755 .
-755 ./etc
-755 ./etc/cloud
-755 ./etc/cloud/cloud.cfg.d
-644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
+run "gw-sucursal gets only its files, with the profile readable by root only" listing_is "$GW_SUCURSAL" "$BASE_LISTING
 755 ./etc/dnsmasq.d
 644 ./etc/dnsmasq.d/the-store.conf
-755 ./etc/netplan
-600 ./etc/netplan/90-the-store.yaml
 755 ./etc/nftables.conf
 755 ./etc/openvpn
 755 ./etc/openvpn/client
@@ -248,7 +263,7 @@ run "gw-sucursal connects with the gw-sucursal profile" \
     cmp "$WORK/gw-sucursal.ovpn" "$GW_SUCURSAL/etc/openvpn/client/the-store.conf"
 run "gw-sucursal installs its packages and enables its services" commands_are gw-sucursal \
     "apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install --yes openvpn nftables dnsmasq
+env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes openvpn nftables dnsmasq
 systemctl enable nftables dnsmasq openvpn-client@the-store"
 run "netplan accepts the gw-sucursal file" netplan generate --root-dir "$GW_SUCURSAL"
 run "netplan names eth0 of gw-sucursal, on the untrusted segment" \
@@ -260,14 +275,8 @@ mkdir -p "$HOST_SUC/etc/netplan"
 (umask 077 && printf 'network:\n  version: 2\n' > "$HOST_SUC/etc/netplan/50-cloud-init.yaml")
 run "host-suc refuses an invalid MAC address" refuses host-suc 52:54:00:00:00:1A
 run "host-suc is provisioned" provision host-suc "$MAC0"
-run "host-suc only gets its netplan file, and the one of cloud-init is disabled" listing_is "$HOST_SUC" "755 .
-755 ./etc
-755 ./etc/cloud
-755 ./etc/cloud/cloud.cfg.d
-644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
-755 ./etc/netplan
-600 ./etc/netplan/50-cloud-init.yaml.disabled
-600 ./etc/netplan/90-the-store.yaml"
+run "host-suc only gets its netplan file, and the one of cloud-init is disabled" listing_is "$HOST_SUC" "$BASE_LISTING
+600 ./etc/netplan/50-cloud-init.yaml.disabled"
 run "host-suc installs no package and enables no service" commands_are host-suc ""
 run "netplan accepts the host-suc file" netplan generate --root-dir "$HOST_SUC"
 run "netplan names eth0 of host-suc, on the branch LAN" netplan_names "$HOST_SUC" eth0 "$MAC0" 172.16.20.10/24
@@ -277,13 +286,7 @@ run "host-suc uses gw-sucursal as gateway and DNS server" host_suc_routes_throug
 run "ca refuses an invalid SSH private key" refuses ca "$WORK/not-a-key.pub" "$MAC0"
 run "ca refuses an invalid MAC address" refuses ca "$WORK/ca-key" 52:54:00:00:00:1A
 run "ca is provisioned" provision ca "$WORK/ca-key" "$MAC0"
-run "ca gets only its files, with the private key readable by root only" listing_is "$CA" "755 .
-755 ./etc
-755 ./etc/cloud
-755 ./etc/cloud/cloud.cfg.d
-644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
-755 ./etc/netplan
-600 ./etc/netplan/90-the-store.yaml
+run "ca gets only its files, with the private key readable by root only" listing_is "$CA" "$BASE_LISTING
 755 ./root
 700 ./root/.ssh
 600 ./root/.ssh/id_ed25519
@@ -291,7 +294,7 @@ run "ca gets only its files, with the private key readable by root only" listing
 run "ca installs its private key and public key" bash -c 'cmp "$1" "$2/root/.ssh/id_ed25519" && cmp "$1.pub" "$2/root/.ssh/id_ed25519.pub"' _ "$WORK/ca-key" "$CA"
 run "ca installs its packages" commands_are ca \
     "apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install --yes easy-rsa openvpn openssh-client"
+env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes easy-rsa openvpn openssh-client"
 run "netplan accepts the ca file" netplan generate --root-dir "$CA"
 run "netplan names eth0 of ca, on the management network" netplan_names "$CA" eth0 "$MAC0" 192.168.100.20/24
 
@@ -299,20 +302,14 @@ run "netplan names eth0 of ca, on the management network" netplan_names "$CA" et
 run "k8s-node refuses an invalid SSH public key" refuses k8s-node "$WORK/not-a-key.pub" "$MAC0"
 run "k8s-node refuses an invalid MAC address" refuses k8s-node "$WORK/ca-key.pub" 52:54:00:00:00:1A
 run "k8s-node is provisioned" provision k8s-node "$WORK/ca-key.pub" "$MAC0"
-run "k8s-node gets only its files, with authorized_keys readable by root only" listing_is "$K8S_NODE" "755 .
-755 ./etc
-755 ./etc/cloud
-755 ./etc/cloud/cloud.cfg.d
-644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
-755 ./etc/netplan
-600 ./etc/netplan/90-the-store.yaml
+run "k8s-node gets only its files, with authorized_keys readable by root only" listing_is "$K8S_NODE" "$BASE_LISTING
 755 ./root
 700 ./root/.ssh
 600 ./root/.ssh/authorized_keys"
 run "k8s-node installs the sysadmin authorized key" cmp "$WORK/ca-key.pub" "$K8S_NODE/root/.ssh/authorized_keys"
 run "k8s-node installs its packages and enables docker" commands_are k8s-node \
     "apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install --yes docker.io curl
+env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes docker.io curl
 systemctl enable docker"
 run "netplan accepts the k8s-node file" netplan generate --root-dir "$K8S_NODE"
 run "netplan names eth0 of k8s-node, on the internal LAN" netplan_names "$K8S_NODE" eth0 "$MAC0" 10.10.10.5/16
@@ -323,20 +320,14 @@ pki issue-client admin-01 sysadmin 20 && pki export-client admin-01 "$WORK/admin
 run "cli-adm refuses an invalid profile" refuses cli-adm "$WORK/not-a-key.pub" "$MAC0"
 run "cli-adm refuses an invalid MAC address" refuses cli-adm "$WORK/admin-01.ovpn" 52:54:00:00:00:1A
 run "cli-adm is provisioned" provision cli-adm "$WORK/admin-01.ovpn" "$MAC0"
-run "cli-adm gets only its files, with the profile readable by root only" listing_is "$CLI_ADM" "755 .
-755 ./etc
-755 ./etc/cloud
-755 ./etc/cloud/cloud.cfg.d
-644 ./etc/cloud/cloud.cfg.d/90-the-store.cfg
-755 ./etc/netplan
-600 ./etc/netplan/90-the-store.yaml
+run "cli-adm gets only its files, with the profile readable by root only" listing_is "$CLI_ADM" "$BASE_LISTING
 755 ./etc/openvpn
 755 ./etc/openvpn/client
 600 ./etc/openvpn/client/the-store.conf"
 run "cli-adm installs the openvpn client profile" cmp "$WORK/admin-01.ovpn" "$CLI_ADM/etc/openvpn/client/the-store.conf"
 run "cli-adm installs its packages and enables openvpn" commands_are cli-adm \
     "apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get install --yes openvpn nmap curl socat
+env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes openvpn nmap curl socat
 systemctl enable openvpn-client@the-store"
 run "netplan accepts the cli-adm file" netplan generate --root-dir "$CLI_ADM"
 run "netplan names eth0 of cli-adm, on the untrusted segment" netplan_names "$CLI_ADM" eth0 "$MAC0" 203.0.113.51/24

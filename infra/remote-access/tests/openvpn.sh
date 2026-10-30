@@ -2,27 +2,14 @@
 # Tests gateway/openvpn/server.conf by running it with the bundle of scripts/pki.sh and real
 # clients (CU1, CU4, CU5). Run with sudo; requires EasyRSA 3, ping, socat, tcpdump, ss and setpriv.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONF=$ROOT/gateway/openvpn/server.conf
-FAILED=0
 MANAGEMENT_SOCKET=/run/openvpn-server/the-store.sock
-
-run() {
-    local description=$1 output line
-    shift
-    if output=$("$@" 2>&1); then
-        echo "ok    $description"
-    else
-        echo "FAIL  $description"
-        while IFS= read -r line; do echo "      $line"; done <<< "$output"
-        FAILED=1
-    fi
-}
 
 # Real server and clients, using the bundle from scripts/pki.sh. Needs EasyRSA 3.
 WORK=
-STOPPED_CONTAINER=
 GATEWAY_IP=203.0.113.10   # remote of clients/client.conf
 DEV_NS=the-store-dev      # network namespace of dev-01
 INGRESS_IP=10.10.10.5     # the node is the gateway itself here, so requests end at tun0
@@ -39,9 +26,6 @@ cleanup() {
     ip addr del "$GATEWAY_IP/32" dev lo 2>/dev/null
     ip addr del "$INGRESS_IP/32" dev lo 2>/dev/null
     rm -rf "$WORK"
-    if [[ -n ${STOPPED_CONTAINER:-} ]]; then
-        docker start "$STOPPED_CONTAINER" >/dev/null 2>&1 || true
-    fi
 }
 
 pki() { env EASYRSA_PASSOUT=pass:test EASYRSA_PASSIN=pass:test bash "$ROOT/scripts/pki.sh" "$WORK/ca" "$@"; }
@@ -202,9 +186,6 @@ answered() { local size; size=$(reply_size "$1") && (( size > 0 )); }
 
 # cleanup deletes this address, so it must not be one that was already there (a running cluster).
 [[ $(ip -4 addr show dev lo) != *" $INGRESS_IP/"* ]] || { echo "$INGRESS_IP is already on lo"; exit 1; }
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^the-store-control-plane$'; then
-    docker stop the-store-control-plane >/dev/null 2>&1 && STOPPED_CONTAINER=the-store-control-plane
-fi
 ! ss -H -tln "sport = :80" | grep -q . || { echo "Port 80 is already in use by another service"; exit 1; }
 WORK=$(mktemp -d)
 trap cleanup EXIT

@@ -2,23 +2,11 @@
 # Tests gateway/dnsmasq/the-store.conf: starts dnsmasq without root on a high port of
 # 127.0.0.1 and queries it. Requires dnsmasq and dig.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 
 CONF=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/gateway/dnsmasq/the-store.conf
 PORT=${DNSMASQ_TEST_PORT:-15353}
 NODE_IP=10.10.10.5
-FAILED=0
-
-run() {
-    local description=$1 output line
-    shift
-    if output=$("$@" 2>&1); then
-        echo "ok    $description"
-    else
-        echo "FAIL  $description"
-        while IFS= read -r line; do echo "      $line"; done <<< "$output"
-        FAILED=1
-    fi
-}
 
 resolves_to_node() {
     local answer

@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Provisions cli-adm from a copy of the repository, as root:
 #   cli-adm.sh PROFILE ETH0_MAC
-# PROFILE comes from scripts/pki.sh export-client admin-01. Installs OpenVPN, nmap, curl,
-# socat, sets up the OpenVPN client profile, and configures static IP on the untrusted segment.
+# PROFILE comes from scripts/pki.sh export-client admin-01.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 PROFILE=${1:?Usage: cli-adm.sh PROFILE ETH0_MAC}
 ETH0_MAC=${2:?Missing MAC address of eth0}
 
-SUBJECT=$(sed -n '/^<cert>$/,/^<\/cert>$/{//!p}' "$PROFILE" | openssl x509 -noout -subject) ||
+sed -n '/^<cert>$/,/^<\/cert>$/{//!p}' "$PROFILE" | openssl x509 -noout ||
     fail "No certificate in the profile"
 check_mac "$ETH0_MAC"
 

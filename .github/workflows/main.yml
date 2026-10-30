@@ -33,6 +33,7 @@ jobs:
     - name: Check that every test is run
       run: |
         for test in infra/remote-access/tests/*; do
+          [ -f "$test" ] && [ "${test##*/}" != run-all.sh ] || continue
           grep -q "$(basename "$test")" .github/workflows/*.yml ||
             { echo "::error::$test is not run by any workflow"; exit 1; }
         done
@@ -102,7 +103,7 @@ jobs:
         ./local.sh create-cluster --remote-access --skip-tests --skip-status
 
     - name: Test remote access to the cluster
-      run: bash infra/remote-access/tests/kubernetes.sh
+      run: REQUIRE_CLUSTER=1 bash infra/remote-access/tests/kubernetes.sh
 
     - name: Check status
       run: |

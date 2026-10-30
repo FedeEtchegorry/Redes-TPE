@@ -4,6 +4,7 @@
 # scripts/pki.sh, and connects from host-suc, which has no VPN client, to the node.
 # Run with sudo; requires EasyRSA 3, OpenVPN, nftables, dnsmasq, dig, socat and tcpdump.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BRANCH=$ROOT/branch
@@ -12,19 +13,6 @@ MARKER=the-store-branch-probe-$$   # payload of the probes, looked for in the ca
 PIDS=()
 CAPTURES=()
 WORK=
-FAILED=0
-
-run() {
-    local description=$1 output line
-    shift
-    if output=$("$@" 2>&1); then
-        echo "ok    $description"
-    else
-        echo "FAIL  $description"
-        while IFS= read -r line; do echo "      $line"; done <<< "$output"
-        FAILED=1
-    fi
-}
 
 ns() { ip netns exec "branch-$1" "${@:2}"; }
 

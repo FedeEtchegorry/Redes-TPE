@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests scripts/pki.sh in a temporary directory. Requires EasyRSA 3, OpenVPN and OpenSSL.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PKI_SH=$ROOT/scripts/pki.sh
@@ -13,19 +14,6 @@ BUNDLE=$WORK/gateway-bundle
 PROFILES=$WORK/profiles
 PASSPHRASE=test-passphrase
 export EASYRSA_PASSOUT=pass:$PASSPHRASE EASYRSA_PASSIN=pass:$PASSPHRASE
-FAILED=0
-
-run() {
-    local description=$1 output line
-    shift
-    if output=$("$@" 2>&1); then
-        echo "ok    $description"
-    else
-        echo "FAIL  $description"
-        while IFS= read -r line; do echo "      $line"; done <<< "$output"
-        FAILED=1
-    fi
-}
 
 ca_key_needs_passphrase() {
     openssl pkey -in "$PKI/private/ca.key" -passin "pass:$PASSPHRASE" -noout &&

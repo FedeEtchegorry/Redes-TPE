@@ -5,24 +5,12 @@
 # Run with sudo in the host network namespace, where nf_log_all_netns can be set to log the
 # drops of a namespace. Requires socat.
 set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONF=$ROOT/gateway/nftables/nftables.conf
 NAMESPACES="gw internet lan management tunnel"
 LISTENERS=()
-FAILED=0
-
-run() {
-    local description=$1 output line
-    shift
-    if output=$("$@" 2>&1); then
-        echo "ok    $description"
-    else
-        echo "FAIL  $description"
-        while IFS= read -r line; do echo "      $line"; done <<< "$output"
-        FAILED=1
-    fi
-}
 
 ns() { ip netns exec "nft-$1" "${@:2}"; }
 

@@ -15,9 +15,7 @@ ETH1_MAC=${3:?Missing MAC address of eth1}
 SUBJECT=$(sed -n '/^<cert>$/,/^<\/cert>$/{//!p}' "$PROFILE" | openssl x509 -noout -subject) ||
     fail "No certificate in the profile"
 [[ $SUBJECT =~ CN\ ?=\ ?gw-sucursal$ ]] || fail "Not the profile of gw-sucursal: $SUBJECT"
-for MAC in "$ETH0_MAC" "$ETH1_MAC"; do
-    check_mac "$MAC"
-done
+check_macs "$ETH0_MAC" "$ETH1_MAC"
 
 # The profile has the private key of gw-sucursal.
 put 600 "$PROFILE" /etc/openvpn/client/the-store.conf

@@ -15,13 +15,6 @@ export EASYRSA_CURVE=${EASYRSA_CURVE:-prime256v1}
 export EASYRSA_CRL_DAYS=${EASYRSA_CRL_DAYS:-30}
 export EASYRSA_CERT_EXPIRE=${EASYRSA_CERT_EXPIRE:-365}
 EASYRSA_BIN=${EASYRSA_BIN:-/usr/share/easy-rsa/easyrsa}
-if [[ ! -x "$EASYRSA_BIN" ]]; then
-    if [[ -n "${SUDO_USER:-}" && -x "/home/${SUDO_USER}/.local/share/easy-rsa/easyrsa" ]]; then
-        EASYRSA_BIN="/home/${SUDO_USER}/.local/share/easy-rsa/easyrsa"
-    elif [[ -x "${HOME:-}/.local/share/easy-rsa/easyrsa" ]]; then
-        EASYRSA_BIN="${HOME}/.local/share/easy-rsa/easyrsa"
-    fi
-fi
 CLIENT_CONF=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/clients/client.conf
 
 fail() {
