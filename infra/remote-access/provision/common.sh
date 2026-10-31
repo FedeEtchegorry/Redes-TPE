@@ -51,10 +51,8 @@ check_bundle() {
     compgen -G "$bundle/ccd/*" > /dev/null || fail "The bundle has no client in its ccd directory"
     openssl verify -CAfile "$bundle/ca.crt" -purpose sslserver "$bundle/gw-vpn.crt" > /dev/null ||
         fail "Invalid gateway server certificate"
-    cert_public=$(openssl x509 -in "$bundle/gw-vpn.crt" -pubkey -noout |
-        openssl pkey -pubin -outform DER | openssl dgst -sha256) || fail "Cannot read certificate public key"
-    key_public=$(openssl pkey -in "$bundle/gw-vpn.key" -passin pass: -pubout -outform DER |
-        openssl dgst -sha256) || fail "Cannot read unencrypted gateway private key"
+    cert_public=$(openssl x509 -in "$bundle/gw-vpn.crt" -pubkey -noout) || fail "Cannot read certificate public key"
+    key_public=$(openssl pkey -in "$bundle/gw-vpn.key" -passin pass: -pubout) || fail "Cannot read unencrypted gateway private key"
     [[ $cert_public == "$key_public" ]] || fail "Gateway key does not match its certificate"
     crl_result=$(openssl crl -in "$bundle/crl.pem" -CAfile "$bundle/ca.crt" -noout 2>&1) ||
         fail "Cannot read bundle CRL"

@@ -56,8 +56,9 @@ NOW=$(date +%s)
 # OpenSSL rejects every client while the CRL is dated in the future, as with a CA clock ahead.
 (( LAST_UPDATE <= NOW )) || fail "CRL is dated in the future: check the clocks of the CA and gw-vpn"
 # An older CRL would accept again the certificates revoked since.
-(( LAST_UPDATE >= $(crl_date "$BUNDLE_DIR/crl.pem" lastupdate) )) ||
-    fail "CRL is older than the installed one"
+(( LAST_UPDATE > $(crl_date "$BUNDLE_DIR/crl.pem" lastupdate) )) ||
+    cmp -s "$CRL" "$BUNDLE_DIR/crl.pem" ||
+    fail "CRL is older than the installed one or conflicts with it; regenerate and retry"
 
 # OpenVPN reads crl.pem on each connection, as the nobody user: the rename keeps it from
 # reading a partial file.

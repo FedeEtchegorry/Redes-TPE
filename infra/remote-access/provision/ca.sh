@@ -8,13 +8,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 KEY=${1:?Usage: ca.sh CA_SSH_PRIVATE_KEY ETH0_MAC}
 ETH0_MAC=${2:?Missing MAC address of eth0}
 
-ssh-keygen -y -f "$KEY" > /dev/null 2>&1 || fail "Invalid SSH private key"
+PUBLIC_KEY=$(ssh-keygen -y -f "$KEY" 2> /dev/null) || fail "Invalid SSH private key"
 check_mac "$ETH0_MAC"
 
 # Install private key to publish CRL over the management network
 install -d -m 700 "$DESTDIR/root/.ssh"
 install -m 600 "$KEY" "$DESTDIR/root/.ssh/id_ed25519"
-ssh-keygen -y -f "$KEY" > "$DESTDIR/root/.ssh/id_ed25519.pub"
+printf '%s\n' "$PUBLIC_KEY" > "$DESTDIR/root/.ssh/id_ed25519.pub"
 chmod 644 "$DESTDIR/root/.ssh/id_ed25519.pub"
 
 # Install packages required for PKI operations and CRL publishing

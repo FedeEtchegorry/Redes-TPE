@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests scripts/pki.sh in a temporary directory. Requires EasyRSA 3, OpenVPN and OpenSSL.
+# Tests scripts/pki.sh in a temporary directory. Requires EasyRSA 3.1.7, OpenVPN and OpenSSL.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/run.sh"
 
@@ -192,6 +192,19 @@ remote_commands_are() {
     [[ $commands == "$1" ]]
 }
 
+same_timestamp_crl_rejected() {
+    local timestamp
+    cp "$BUNDLE/crl.pem" "$WORK/installed-crl.pem" || return 1
+    EASYRSA_PKI=$PKI "${EASYRSA_BIN:-/usr/share/easy-rsa/easyrsa}" --batch make-safe-ssl || return 1
+    timestamp=$(openssl crl -in "$BUNDLE/crl.pem" -noout -lastupdate)
+    timestamp=$(date -u -d "${timestamp#*=}" +%Y%m%d%H%M%SZ)
+    openssl ca -gencrl -config "$PKI/safessl-easyrsa.cnf" -passin "pass:$PASSPHRASE" \
+        -crl_lastupdate "$timestamp" -out "$WORK/conflicting-crl.pem" || return 1
+    BUNDLE_DIR=$BUNDLE bash "$ROOT/gateway/openvpn/update-crl.sh" < "$BUNDLE/crl.pem" || return 1
+    ! BUNDLE_DIR=$BUNDLE bash "$ROOT/gateway/openvpn/update-crl.sh" < "$WORK/conflicting-crl.pem" &&
+        cmp "$WORK/installed-crl.pem" "$BUNDLE/crl.pem"
+}
+
 run "init creates the CA" bash "$PKI_SH" "$CA_DIR" init
 run "CA key requires the passphrase" ca_key_needs_passphrase
 run "CA certificate is a prime256v1 CA named The Store VPN CA" ca_certificate
@@ -279,4 +292,5 @@ run "publish-crl refuses names that are not plain identifiers" refuses_publish_c
 run "publish-crl runs update-crl by ssh, and nothing for refused names" \
     remote_commands_are "ssh the-store-crl@192.168.100.1 sudo /usr/local/sbin/the-store-update-crl dev-01"
 run "publish-crl sends the CRL on standard input" cmp "$PKI/crl.pem" "$WORK/sent-crl.pem"
+run "update-crl accepts an identical CRL and rejects a different one with the same timestamp" same_timestamp_crl_rejected
 exit "$FAILED"

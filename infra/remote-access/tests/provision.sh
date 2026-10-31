@@ -132,6 +132,14 @@ cli_adm_routes_through_wan_gateway() {
     grep -qx 'Gateway=203.0.113.1' <<< "$network"
 }
 
+additional_sysadmin_key_preserves_access() {
+    local authorized_keys=$K8S_NODE/root/.ssh/authorized_keys
+    ssh-keygen -q -t ed25519 -N '' -C second-admin -f "$WORK/second-admin" || return 1
+    provision k8s-node "$WORK/second-admin.pub" "$MAC0" || return 1
+    provision k8s-node "$WORK/second-admin.pub" "$MAC0" || return 1
+    cat "$WORK/ca-key.pub" "$WORK/second-admin.pub" | diff -B - "$authorized_keys"
+}
+
 run "pki.sh issues the certificates, the bundle and the profiles" issue_certificates
 echo "not a key" > "$WORK/not-a-key.pub"
 mkdir "$WORK/empty-bundle"
@@ -306,7 +314,7 @@ run "k8s-node gets only its files, with authorized_keys readable by root only" l
 755 ./root
 700 ./root/.ssh
 600 ./root/.ssh/authorized_keys"
-run "k8s-node installs the sysadmin authorized key" cmp "$WORK/ca-key.pub" "$K8S_NODE/root/.ssh/authorized_keys"
+run "k8s-node installs the sysadmin authorized key" diff -B "$WORK/ca-key.pub" "$K8S_NODE/root/.ssh/authorized_keys"
 run "k8s-node installs its packages and enables docker" commands_are k8s-node \
     "apt-get update
 env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes docker.io curl
@@ -314,6 +322,8 @@ systemctl enable docker"
 run "netplan accepts the k8s-node file" netplan generate --root-dir "$K8S_NODE"
 run "netplan names eth0 of k8s-node, on the internal LAN" netplan_names "$K8S_NODE" eth0 "$MAC0" 10.10.10.5/16
 run "k8s-node routes through gw-vpn" k8s_node_routes_through_gw_vpn
+run "Adding the same sysadmin key twice preserves existing access without duplicates" \
+    additional_sysadmin_key_preserves_access
 
 # cli-adm
 pki issue-client admin-01 sysadmin 20 && pki export-client admin-01 "$WORK/admin-01.ovpn"
