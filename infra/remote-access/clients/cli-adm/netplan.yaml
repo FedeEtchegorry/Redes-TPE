@@ -1,5 +1,6 @@
 # Installed as /etc/netplan/90-the-store.yaml on cli-adm by provision/cli-adm.sh, which puts
 # the MAC address of its interface. cli-adm is on the untrusted Internet segment (203.0.113.0/24).
+# OpenVPN adds the route to k8s-node. The default Internet route stays on this network.
 network:
   version: 2
   ethernets:

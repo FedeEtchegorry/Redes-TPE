@@ -2,7 +2,7 @@
 # Provisions gw-sucursal from a copy of the repository, as root:
 #   gw-sucursal.sh PROFILE ETH0_MAC ETH1_MAC
 # PROFILE comes from scripts/pki.sh export-client gw-sucursal. gw-sucursal has no incoming
-# port: it is managed from its console. The interfaces get their names and the services start
+# WAN port: it is managed from its console. The interfaces get their names and the services start
 # at the next boot.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -11,7 +11,7 @@ PROFILE=${1:?Usage: gw-sucursal.sh PROFILE ETH0_MAC ETH1_MAC}
 ETH0_MAC=${2:?Missing MAC address of eth0}
 ETH1_MAC=${3:?Missing MAC address of eth1}
 
-# Another profile would get a dev tunnel IP and no iroute for the branch LAN.
+# Only gw-sucursal has the branch LAN iroute in its CCD. Another profile would lose that route.
 SUBJECT=$(sed -n '/^<cert>$/,/^<\/cert>$/{//!p}' "$PROFILE" | openssl x509 -noout -subject) ||
     fail "No certificate in the profile"
 [[ $SUBJECT =~ CN\ ?=\ ?gw-sucursal$ ]] || fail "Not the profile of gw-sucursal: $SUBJECT"

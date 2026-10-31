@@ -2,7 +2,7 @@
 # Provisions k8s-node from a copy of the repository, as root:
 #   k8s-node.sh SYSADMIN_SSH_KEY ETH0_MAC
 # SYSADMIN_SSH_KEY contains one public SSH key of the sysadmin profile (authorized in CU3).
-# Installs Docker; the OpenSSH server must already be installed.
+# Installs Docker. The OpenSSH server must already be installed.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 

@@ -1,5 +1,7 @@
 # Kubernetes identity of the VPN sysadmin profile: read access to the
 # the-store namespace through the view ClusterRole, which excludes Secrets and exec.
+# VPN certificates control network access. Kubernetes uses a separate token.
+# Revoking the VPN certificate does not revoke that token.
 # scripts/sysadmin-kubeconfig.sh issues its expiring tokens. To revoke all of them:
 # kubectl -n the-store delete serviceaccount sysadmin.
 apiVersion: v1

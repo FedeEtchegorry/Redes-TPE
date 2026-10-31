@@ -52,6 +52,8 @@ case "$ACTION" in
         ROLE=${2:?Missing role: dev|sysadmin|sucursal}
         OCTET=${3:?Missing last tunnel IP octet}
         check_name "$CLIENT"
+        # These IP ranges define the roles used by gateway/nftables/nftables.conf.
+        # Pushed routes direct traffic. nftables decides which connections are allowed.
         case "$ROLE" in
             dev) [[ "$OCTET" == 1[0-9] ]] || fail "dev uses .10-.19" ;;
             sysadmin) [[ "$OCTET" == 2[0-9] ]] || fail "sysadmin uses .20-.29" ;;
