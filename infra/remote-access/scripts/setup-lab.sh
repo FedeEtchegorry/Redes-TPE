@@ -75,17 +75,26 @@ else
     C_RESET='' C_BOLD='' C_BLUE='' C_CYAN='' C_GREEN='' C_YELLOW='' C_RED=''
 fi
 
-banner() {
-    printf "\n${C_BLUE}==============================================================================${C_RESET}\n"
-    printf "${C_BOLD}${C_CYAN}  %s${C_RESET}\n" "$*"
-    printf "${C_BLUE}==============================================================================${C_RESET}\n"
+mkdir -p "$PROFILES_DIR"
+LOG_FILE="$PROFILES_DIR/setup-lab.log"
+: > "$LOG_FILE"
+
+log_out() {
+    printf "%b" "$*"
+    printf "%b" "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE"
 }
 
-step()  { printf "${C_CYAN}[PASO]${C_RESET} %s\n" "$*"; }
-info()  { printf "  ${C_BLUE}->${C_RESET} %s\n" "$*"; }
-ok()    { printf "  ${C_GREEN}[OK]${C_RESET} %s\n" "$*"; }
-warn()  { printf "  ${C_YELLOW}[AVISO]${C_RESET} %s\n" "$*"; }
-err()   { printf "  ${C_RED}[ERROR]${C_RESET} %s\n" "$*" >&2; exit 1; }
+banner() {
+    log_out "\n${C_BLUE}==============================================================================${C_RESET}\n"
+    log_out "${C_BOLD}${C_CYAN}  $*${C_RESET}\n"
+    log_out "${C_BLUE}==============================================================================${C_RESET}\n"
+}
+
+step()  { log_out "${C_CYAN}[PASO]${C_RESET} $*\n"; }
+info()  { log_out "  ${C_BLUE}->${C_RESET} $*\n"; }
+ok()    { log_out "  ${C_GREEN}[OK]${C_RESET} $*\n"; }
+warn()  { log_out "  ${C_YELLOW}[AVISO]${C_RESET} $*\n"; }
+err()   { log_out "  ${C_RED}[ERROR]${C_RESET} $*\n" >&2; exit 1; }
 
 SSH_OPTS=(-i "$HOST_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
 
@@ -99,13 +108,13 @@ ssh_ip()   { local ip=$1; shift; ssh "${SSH_OPTS[@]}" "$GUEST_USER@$ip" "$@"; }
 start_all_vms() {
     step "Iniciando las 6 VMs en modo headless (segundo plano)..."
     local running vm
-    running=$("$VBOX" list runningvms | tr -d '\r')
+    running=$("$VBOX" list runningvms </dev/null | tr -d '\r')
     for vm in "${ALL_VMS[@]}"; do
         if grep -q "\"$vm\"" <<<"$running"; then
             info "VM '$vm' ya está encendida."
         else
             info "Encendiendo VM '$vm'..."
-            "$VBOX" startvm "$vm" --type headless >/dev/null
+            "$VBOX" startvm "$vm" --type headless </dev/null >/dev/null 2>&1
             sleep 2
         fi
     done
@@ -114,20 +123,24 @@ start_all_vms() {
 
 stop_all_vms() {
     step "Apagando las 6 VMs..."
-    local vm i running
+    local vm running
+    running=$("$VBOX" list runningvms </dev/null | tr -d '\r')
+    if [[ -z "$running" ]]; then
+        ok "Las 6 VMs ya están apagadas."
+        return 0
+    fi
     for vm in host-suc gw-sucursal cli-adm ca k8s-node gw-vpn; do
-        "$VBOX" controlvm "$vm" acpipowerbutton 2>/dev/null || true
+        if grep -q "\"$vm\"" <<<"$running"; then
+            info "Apagando VM '$vm'..."
+            timeout 3 "$VBOX" guestcontrol "$vm" closesession --all </dev/null >/dev/null 2>&1 || true
+            if ! timeout 8 "$VBOX" controlvm "$vm" poweroff </dev/null >/dev/null 2>&1; then
+                warn "VM '$vm' no respondió a poweroff en 8s; cerrando proceso VBoxHeadless..."
+                powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='VBoxHeadless.exe' AND CommandLine LIKE '%$vm%'\" | Invoke-CimMethod -MethodName Terminate" </dev/null >/dev/null 2>&1 || true
+            fi
+            sleep 1
+        fi
     done
-    for i in {1..15}; do
-        running=$("$VBOX" list runningvms | tr -d '\r')
-        [[ -z "$running" ]] && { ok "Las 6 VMs se apagaron limpiamente."; return 0; }
-        sleep 2
-    done
-    warn "Algunas VMs siguen encendidas; forzando poweroff..."
-    for vm in host-suc gw-sucursal cli-adm ca k8s-node gw-vpn; do
-        "$VBOX" controlvm "$vm" poweroff 2>/dev/null || true
-    done
-    sleep 3
+    sleep 2
     ok "Las 6 VMs están apagadas."
 }
 
@@ -140,7 +153,8 @@ wait_for_offline_hosts() {
         info "Esperando a $name ($host)..."
         for i in {1..45}; do
             if ssh_ip "$host" "hostname" >/dev/null 2>&1; then
-                ok "$name ($host) responde por SSH."
+                ssh_ip "$host" "echo $GUEST_PASS | sudo -S date -u -s '@$(date -u +%s)' >/dev/null 2>&1 || true"
+                ok "$name ($host) responde por SSH (reloj UTC sincronizado)."
                 break
             fi
             [[ $i -eq 45 ]] && err "Tiempo de espera agotado esperando a $name ($host)."
@@ -217,6 +231,7 @@ cmd_verify() {
     ssh_ip 192.168.100.20 "echo $GUEST_PASS | sudo -S bash -c '
         export EASYRSA_PASSIN=pass:$CA_PASS
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store gen-crl
+        sleep 2
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store publish-crl
     '" | sed 's/^/     /'
     ok "CA generó y publicó la CRL en gw-vpn por la red de gestión."
@@ -469,8 +484,9 @@ if [[ -z "$ACTION" && -t 0 ]]; then
     echo "  4) start       - Iniciar las 6 VMs en segundo plano"
     echo "  5) stop        - Apagar las 6 VMs limpiamente"
     echo "  6) full        - Desplegar Pasos 3 a 8 desde cero a partir de 'the-store-base'"
+    echo "  7) eval        - Simular Evaluación/Defensa completa del Profesor (CU1..CU5 + Revocación)"
     echo ""
-    printf "Elegí una opción [1-6 o nombre, Enter=1 (status)]: "
+    printf "Elegí una opción [1-7 o nombre, Enter=1 (status)]: "
     read -r choice || true
     case "${choice:-1}" in
         1|status)     ACTION="status" ;;
@@ -479,25 +495,25 @@ if [[ -z "$ACTION" && -t 0 ]]; then
         4|start)      ACTION="start" ;;
         5|stop)       ACTION="stop" ;;
         6|full)       ACTION="full" ;;
+        7|eval)       ACTION="eval" ;;
         *)            ACTION="$choice" ;;
     esac
 elif [[ -z "$ACTION" ]]; then
     ACTION="status"
 fi
 
-{
-    case "$ACTION" in
-        full|provision)     cmd_full ;;
-        status)             cmd_status ;;
-        verify|test)        cmd_verify ;;
-        reset-demo|restore) cmd_reset_demo ;;
-        start)              start_all_vms; wait_for_offline_hosts ;;
-        stop)               stop_all_vms ;;
-        *)
-            echo "Uso: $0 {status|verify|reset-demo|start|stop|full}" >&2
-            exit 1
-            ;;
-    esac
-} 2>&1 | tee "$LOG_FILE"
+case "$ACTION" in
+    full|provision)     cmd_full ;;
+    status)             cmd_status ;;
+    verify|test)        cmd_verify ;;
+    reset-demo|restore) cmd_reset_demo ;;
+    start)              start_all_vms; wait_for_offline_hosts ;;
+    stop)               stop_all_vms ;;
+    eval|profesor)      NO_PAUSE=1 bash "$SCRIPT_DIR/evaluacion-profesor.sh" --no-pause ;;
+    *)
+        echo "Uso: $0 {status|verify|reset-demo|start|stop|full|eval}" >&2
+        exit 1
+        ;;
+esac
 
 
