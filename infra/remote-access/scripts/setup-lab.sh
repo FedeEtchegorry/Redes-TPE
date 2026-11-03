@@ -426,19 +426,61 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# Punto de entrada principal
+# Punto de entrada principal (con pausa interactiva y log en archivo)
 # ------------------------------------------------------------------------------
-ACTION=${1:-status}
-case "$ACTION" in
-    full|provision) cmd_full ;;
-    status)         cmd_status ;;
-    verify|test)    cmd_verify ;;
-    reset-demo|restore) cmd_reset_demo ;;
-    start)          start_all_vms; wait_for_offline_hosts ;;
-    stop)           stop_all_vms ;;
-    *)
-        echo "Uso: $0 {status|verify|reset-demo|start|stop|full}" >&2
-        exit 1
-        ;;
-esac
+mkdir -p "$PROFILES_DIR"
+LOG_FILE="$PROFILES_DIR/setup-lab.log"
+NO_PAUSE=${NO_PAUSE:-0}
+[[ "${2:-}" == "--no-pause" ]] && NO_PAUSE=1
+
+on_exit() {
+    local code=$?
+    printf "\n${C_CYAN}[LOG]${C_RESET} Salida completa guardada en: %s\n" "$LOG_FILE"
+    if [[ -t 0 && "$NO_PAUSE" == "0" ]]; then
+        printf "\n${C_BOLD}${C_YELLOW}Ejecución finalizada (código %d). Presioná ENTER para cerrar...${C_RESET}" "$code"
+        read -r _ || true
+    fi
+}
+trap on_exit EXIT
+
+ACTION=${1:-}
+if [[ -z "$ACTION" && -t 0 ]]; then
+    banner "MENÚ INTERACTIVO — LABORATORIO VIRTUALBOX (REDES-TPE)"
+    echo "  1) status      - Ver estado de redes, VMs, túneles VPN y pods K8s"
+    echo "  2) verify      - Ejecutar pruebas integrales punta a punta (CA, Sysadmin, K8s, Sucursal)"
+    echo "  3) reset-demo  - Apagar VMs, restaurar snapshot 'demo', iniciar y verificar"
+    echo "  4) start       - Iniciar las 6 VMs en segundo plano"
+    echo "  5) stop        - Apagar las 6 VMs limpiamente"
+    echo "  6) full        - Desplegar Pasos 3 a 8 desde cero a partir de 'the-store-base'"
+    echo ""
+    printf "Elegí una opción [1-6 o nombre, Enter=1 (status)]: "
+    read -r choice || true
+    case "${choice:-1}" in
+        1|status)     ACTION="status" ;;
+        2|verify)     ACTION="verify" ;;
+        3|reset-demo) ACTION="reset-demo" ;;
+        4|start)      ACTION="start" ;;
+        5|stop)       ACTION="stop" ;;
+        6|full)       ACTION="full" ;;
+        *)            ACTION="$choice" ;;
+    esac
+elif [[ -z "$ACTION" ]]; then
+    ACTION="status"
+fi
+
+{
+    case "$ACTION" in
+        full|provision)     cmd_full ;;
+        status)             cmd_status ;;
+        verify|test)        cmd_verify ;;
+        reset-demo|restore) cmd_reset_demo ;;
+        start)              start_all_vms; wait_for_offline_hosts ;;
+        stop)               stop_all_vms ;;
+        *)
+            echo "Uso: $0 {status|verify|reset-demo|start|stop|full}" >&2
+            exit 1
+            ;;
+    esac
+} 2>&1 | tee "$LOG_FILE"
+
 
