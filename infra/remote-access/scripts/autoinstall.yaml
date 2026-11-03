@@ -1,0 +1,18 @@
+version: 1
+locale: en_US.UTF-8
+keyboard:
+  layout: us
+identity:
+  hostname: @HOSTNAME@
+  username: @USERNAME@
+  realname: @USERNAME@
+  password: "@PASSWORD_HASH@"
+ssh:
+  install-server: true
+  allow-pw: true
+storage:
+  layout:
+    name: direct
+refresh-installer:
+  update: false
+shutdown: poweroff

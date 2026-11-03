@@ -27,5 +27,5 @@ put 644 "$ROOT/branch/sysctl/the-store.conf" /etc/sysctl.d/90-the-store.conf
 install_packages openvpn nftables dnsmasq
 
 system systemctl enable nftables dnsmasq openvpn-client@the-store
-gateway_netplan eth0 "$ETH0_MAC" 203.0.113.20/24 eth1 "$ETH1_MAC" 172.16.20.1/24 | install_netplan
+sed -e "s/@ETH0_MAC@/$ETH0_MAC/" -e "s/@ETH1_MAC@/$ETH1_MAC/" "$ROOT/branch/gw-sucursal/netplan.yaml" | install_netplan
 echo "gw-sucursal is provisioned: reboot to rename the interfaces and start the services."

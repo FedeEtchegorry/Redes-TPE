@@ -66,17 +66,6 @@ check_bundle() {
     (( next_update > now )) || fail "Bundle CRL has expired"
 }
 
-# gateway_netplan NAME MAC ADDRESS...: names each interface by its MAC address, since nftables,
-# OpenVPN and dnsmasq use eth0, eth1 and eth2, and nft accepts names that do not exist.
-gateway_netplan() {
-    printf 'network:\n  version: 2\n  ethernets:\n'
-    while (( $# )); do
-        printf '    %s:\n      match:\n        macaddress: "%s"\n      set-name: %s\n' "$1" "$2" "$1"
-        printf '      dhcp4: false\n      addresses:\n        - %s\n' "$3"
-        shift 3
-    done
-}
-
 # install_netplan: installs standard input as the only netplan file. The others, such as the
 # DHCP of cloud-init, are kept as .disabled, and cloud-init no longer writes the network.
 install_netplan() {

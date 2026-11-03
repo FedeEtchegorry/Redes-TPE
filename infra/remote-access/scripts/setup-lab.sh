@@ -14,27 +14,21 @@
 #   bash infra/remote-access/scripts/setup-lab.sh [comando]
 #
 # Comandos disponibles:
-#   full        Ejecuta los Pasos 3 a 8 desde cero a partir de 'the-store-base'
+#   full        Ejecuta los Pasos 1 a 8 desde cero (crea redes y 'the-store-base' con Ubuntu si faltan)
 #   status      Muestra el estado detallado de redes, VMs, túneles VPN y pods K8s
 #   verify      Ejecuta la batería de pruebas punta a punta (CA, Sysadmin, Sucursal, Dev)
 #   reset-demo  Apaga las 6 VMs, restaura el snapshot 'demo', las inicia y verifica todo
 #   start       Inicia las 6 VMs en segundo plano (headless) y espera a que estén listas
-#   stop        Apaga las 6 VMs limpiamente
+#   stop        Apaga las 6 VMs
+#   eval        Simula la corrección de la defensa (CU1..CU6); restaura el snapshot 'demo' al empezar y al terminar
 # ==============================================================================
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REMOTE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+LOG_NAME=setup-lab
+source "$(dirname "${BASH_SOURCE[0]}")/lab-common.sh"
 REPO_ROOT=$(cd "$REMOTE_DIR/../.." && pwd)
-
-# Configuración por defecto (personalizable por variables de entorno)
-GUEST_USER=${GUEST_USER:-home}
-GUEST_PASS=${GUEST_PASS:-bishbashbosh}
-CA_PASS=${CA_PASS:-$GUEST_PASS}
-PROFILES_DIR="$REMOTE_DIR/profiles"
 BUNDLES_DIR="$REMOTE_DIR/bundles"
-HOST_KEY="$PROFILES_DIR/host_admin_ed25519"
 CA_KEY="$PROFILES_DIR/ca_ed25519"
 SYSADMIN_KEY="$PROFILES_DIR/sysadmin_ed25519"
 
@@ -49,58 +43,34 @@ MAC_GW_SUC_WAN="08:00:27:00:05:01"
 MAC_GW_SUC_BRANCH="08:00:27:00:05:02"
 MAC_HOST_SUC_BRANCH="08:00:27:00:06:01"
 
-ALL_VMS=(gw-vpn k8s-node ca cli-adm gw-sucursal host-suc)
-
-# Detectar VBoxManage en Linux/macOS/Windows (Git Bash)
-if command -v VBoxManage >/dev/null 2>&1; then
-    VBOX="VBoxManage"
-elif [[ -x "/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" ]]; then
-    VBOX="/c/Program Files/Oracle/VirtualBox/VBoxManage.exe"
-    export PATH="/c/Program Files/Oracle/VirtualBox:$PATH"
-else
-    echo "ERROR: No se encontró VBoxManage. Instalá VirtualBox 7 primero." >&2
-    exit 1
-fi
-
-# Colores y funciones de formato informativo
-if [[ -t 1 ]]; then
-    C_RESET='\033[0m'
-    C_BOLD='\033[1m'
-    C_BLUE='\033[1;34m'
-    C_CYAN='\033[1;36m'
-    C_GREEN='\033[1;32m'
-    C_YELLOW='\033[1;33m'
-    C_RED='\033[1;31m'
-else
-    C_RESET='' C_BOLD='' C_BLUE='' C_CYAN='' C_GREEN='' C_YELLOW='' C_RED=''
-fi
-
-mkdir -p "$PROFILES_DIR"
-LOG_FILE="$PROFILES_DIR/setup-lab.log"
-: > "$LOG_FILE"
-
-log_out() {
-    printf "%b" "$*"
-    printf "%b" "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE"
-}
-
-banner() {
-    log_out "\n${C_BLUE}==============================================================================${C_RESET}\n"
-    log_out "${C_BOLD}${C_CYAN}  $*${C_RESET}\n"
-    log_out "${C_BLUE}==============================================================================${C_RESET}\n"
-}
-
 step()  { log_out "${C_CYAN}[PASO]${C_RESET} $*\n"; }
 info()  { log_out "  ${C_BLUE}->${C_RESET} $*\n"; }
 ok()    { log_out "  ${C_GREEN}[OK]${C_RESET} $*\n"; }
 warn()  { log_out "  ${C_YELLOW}[AVISO]${C_RESET} $*\n"; }
 err()   { log_out "  ${C_RED}[ERROR]${C_RESET} $*\n" >&2; exit 1; }
 
-SSH_OPTS=(-i "$HOST_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
-
 ssh_nat()  { local port=$1; shift; ssh "${SSH_OPTS[@]}" -p "$port" "$GUEST_USER@127.0.0.1" "$@"; }
 scp_nat()  { local port=$1; shift; scp "${SSH_OPTS[@]}" -P "$port" "$@"; }
-ssh_ip()   { local ip=$1; shift; ssh "${SSH_OPTS[@]}" "$GUEST_USER@$ip" "$@"; }
+
+install_host_key() {
+    local port=$1 askpass key out="" i rc=1
+    key=$(cat "$HOST_KEY.pub")
+    askpass=$(mktemp)
+    printf '#!/bin/sh\necho "$GUEST_PASS"\n' > "$askpass"
+    chmod +x "$askpass"
+    for i in {1..60}; do
+        out=$(GUEST_PASS=$GUEST_PASS SSH_ASKPASS=$askpass SSH_ASKPASS_REQUIRE=force \
+            ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 \
+                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR \
+                -p "$port" "$GUEST_USER@127.0.0.1" \
+                "umask 077; mkdir -p ~/.ssh; grep -qxF '$key' ~/.ssh/authorized_keys 2>/dev/null || echo '$key' >> ~/.ssh/authorized_keys" \
+                </dev/null 2>&1) && { rc=0; break; }
+        [[ $out == *"Permission denied"* ]] && break
+        sleep 3
+    done
+    rm -f "$askpass"
+    [[ $rc == 0 ]] || err "La VM del puerto $port no aceptó la contraseña de '$GUEST_USER' o no respondió por SSH: $out"
+}
 
 # ------------------------------------------------------------------------------
 # Funciones de ciclo de vida de VMs
@@ -129,13 +99,22 @@ stop_all_vms() {
         ok "Las 6 VMs ya están apagadas."
         return 0
     fi
+    # Apagado ordenado primero: un poweroff en seco pierde lo último escrito a disco.
+    for vm in "${ALL_VMS[@]}"; do
+        grep -q "\"$vm\"" <<<"$running" && "$VBOX" controlvm "$vm" acpipowerbutton </dev/null >/dev/null 2>&1 || true
+    done
+    for _ in {1..30}; do
+        [[ -z "$("$VBOX" list runningvms </dev/null | tr -d '\r')" ]] && break
+        sleep 2
+    done
+    running=$("$VBOX" list runningvms </dev/null | tr -d '\r')
     for vm in host-suc gw-sucursal cli-adm ca k8s-node gw-vpn; do
         if grep -q "\"$vm\"" <<<"$running"; then
             info "Apagando VM '$vm'..."
             timeout 3 "$VBOX" guestcontrol "$vm" closesession --all </dev/null >/dev/null 2>&1 || true
             if ! timeout 8 "$VBOX" controlvm "$vm" poweroff </dev/null >/dev/null 2>&1; then
                 warn "VM '$vm' no respondió a poweroff en 8s; cerrando proceso VBoxHeadless..."
-                powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='VBoxHeadless.exe' AND CommandLine LIKE '%$vm%'\" | Invoke-CimMethod -MethodName Terminate" </dev/null >/dev/null 2>&1 || true
+                powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='VBoxHeadless.exe' AND CommandLine LIKE '%--comment $vm --startvm%'\" | Invoke-CimMethod -MethodName Terminate" </dev/null >/dev/null 2>&1 || true
             fi
             sleep 1
         fi
@@ -177,13 +156,45 @@ wait_for_offline_hosts() {
 
     step "Esperando que el cluster Kubernetes en k8s-node (10.10.10.5) tenga todos los microservicios listos..."
     for i in {1..60}; do
-        if ssh_ip 203.0.113.51 "curl -fsS --max-time 5 http://ui.the-store.internal/actuator/health/readiness >/dev/null 2>&1"; then
-            ok "Ingress y microservicios de 'the-store' respondiendo en http://*.the-store.internal"
+        if ssh_ip 203.0.113.51 'for s in ui carts orders; do curl -fsS --max-time 5 "http://$s.the-store.internal/actuator/health/readiness" || exit 1; done; for s in catalog checkout; do curl -fsS --max-time 5 "http://$s.the-store.internal/health" || exit 1; done' >/dev/null 2>&1; then
+            ok "Los 5 microservicios de 'the-store' responden por el Ingress en http://*.the-store.internal"
             break
         fi
         [[ $i -eq 60 ]] && err "El Ingress en 10.10.10.5:80 no respondió a tiempo."
         sleep 3
     done
+}
+
+publish_crl() {
+    ssh_ip 192.168.100.20 "echo $GUEST_PASS | sudo -S bash -c '
+        set -e
+        ssh-keygen -F 192.168.100.1 -f /root/.ssh/known_hosts >/dev/null 2>&1 || ssh-keyscan -H 192.168.100.1 >> /root/.ssh/known_hosts 2>/dev/null
+        export EASYRSA_PASSIN=pass:$CA_PASS
+        bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store gen-crl
+        sleep 2
+        bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store publish-crl
+    '" | sed 's/^/     /'
+}
+
+refresh_demo_credentials() {
+    step "Renovando CRL y kubeconfig de sysadmin (el snapshot 'demo' los trae viejos)..."
+    publish_crl
+    ssh_ip 203.0.113.51 bash -s -- "$GUEST_USER" <<'EOF'
+set -euo pipefail
+user=$1
+new=$(mktemp)
+ssh -n -o StrictHostKeyChecking=no root@10.10.10.5 "
+    set -e
+    f=\$(mktemp -u)
+    export PATH=/usr/local/bin:\$PATH
+    KUBECONFIG=/home/$user/.kube/config bash /home/$user/Redes-TPE/infra/remote-access/scripts/sysadmin-kubeconfig.sh \$f >/dev/null
+    cat \$f; rm -f \$f
+" > "$new"
+install -m 600 "$new" "$HOME/.kube/config"
+rm -f "$new"
+kubectl get pods -n the-store >/dev/null
+EOF
+    ok "CRL publicada y kubeconfig de sysadmin renovado en cli-adm (kubectl get pods OK)."
 }
 
 # ------------------------------------------------------------------------------
@@ -228,12 +239,7 @@ cmd_verify() {
     wait_for_offline_hosts
 
     step "1. Probando publicación de CRL desde 'ca' (192.168.100.20) hacia 'gw-vpn' (192.168.100.1)..."
-    ssh_ip 192.168.100.20 "echo $GUEST_PASS | sudo -S bash -c '
-        export EASYRSA_PASSIN=pass:$CA_PASS
-        bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store gen-crl
-        sleep 2
-        bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store publish-crl
-    '" | sed 's/^/     /'
+    publish_crl
     ok "CA generó y publicó la CRL en gw-vpn por la red de gestión."
 
     step "2. Probando perfil Sysadmin desde 'cli-adm' (203.0.113.51, túnel 10.8.0.20)..."
@@ -267,7 +273,8 @@ cmd_verify() {
     MSYS2_ARG_CONV_EXCL="*" "$VBOX" guestcontrol host-suc run --exe /bin/bash --username "$GUEST_USER" --password "$GUEST_PASS" -- -c '
         set -euo pipefail
         resolved=$(dig +short @172.16.20.1 ui.the-store.internal)
-        [[ "$resolved" == "10.10.10.5" ]] && echo "     [OK] DNS @172.16.20.1 ui.the-store.internal -> $resolved"
+        [[ "$resolved" == "10.10.10.5" ]] || { echo "     [FALLO] DNS @172.16.20.1 ui.the-store.internal -> $resolved"; exit 1; }
+        echo "     [OK] DNS @172.16.20.1 ui.the-store.internal -> $resolved"
         for svc in ui carts orders; do
             curl -fsS --max-time 10 "http://${svc}.the-store.internal/actuator/health/readiness" >/dev/null
             echo "     [OK] host-suc HTTP -> http://${svc}.the-store.internal"
@@ -303,6 +310,7 @@ cmd_reset_demo() {
     ok "Snapshot 'demo' restaurado en las 6 VMs."
     start_all_vms
     wait_for_offline_hosts
+    refresh_demo_credentials
     banner "ENTORNO RESTAURADO Y LISTO PARA DEMO"
 }
 
@@ -310,7 +318,7 @@ cmd_reset_demo() {
 # Comando: full (Aprovisionamiento completo Pasos 3 a 8 desde the-store-base)
 # ------------------------------------------------------------------------------
 cmd_full() {
-    banner "DESPLIEGUE COMPLETO DEL LABORATORIO DESDE 'the-store-base' (PASOS 3 A 8)"
+    banner "DESPLIEGUE COMPLETO DEL LABORATORIO DESDE 'the-store-base' (PASOS 1 A 8)"
 
     if "$VBOX" snapshot gw-vpn list 2>/dev/null | grep -q "Name: demo (" && [[ "${RECREATE:-0}" != "1" ]]; then
         info "Las 6 VMs ya existen, ya fueron aprovisionadas y están en modo OFFLINE (sin NAT en puertos 2201-2206)."
@@ -327,7 +335,17 @@ cmd_full() {
         for vm in "${ALL_VMS[@]}"; do
             "$VBOX" unregistervm "$vm" --delete 2>/dev/null || true
         done
+    else
+        for vm in "${ALL_VMS[@]}"; do
+            if "$VBOX" showvminfo "$vm" >/dev/null 2>&1; then
+                err "La VM '$vm' ya existe pero no hay snapshot 'demo' (corrida anterior a medias). Reintentá con RECREATE=1."
+            fi
+        done
     fi
+
+    step "Pasos 1 y 2: Redes host-only y VM base 'the-store-base' (se crean si faltan; el SO se instala solo)..."
+    bash "$SCRIPT_DIR/virtualbox.sh" networks
+    "$VBOX" showvminfo the-store-base >/dev/null 2>&1 || bash "$SCRIPT_DIR/virtualbox.sh" base
 
     step "Paso 3: Creando los 6 clones vinculados desde 'the-store-base'..."
     bash "$SCRIPT_DIR/virtualbox.sh" clones
@@ -341,11 +359,11 @@ cmd_full() {
     [[ -f "$CA_KEY" ]]       || ssh-keygen -q -t ed25519 -N '' -C "ca@the-store" -f "$CA_KEY"
     [[ -f "$SYSADMIN_KEY" ]] || ssh-keygen -q -t ed25519 -N '' -C "sysadmin@the-store" -f "$SYSADMIN_KEY"
 
-    local idx=0 vm port pubkey
-    pubkey=$(cat "$HOST_KEY.pub")
+    local idx=0 vm port
     for vm in "${ALL_VMS[@]}"; do
         idx=$((idx + 1))
         port=$((2200 + idx))
+        install_host_key "$port"
         info "Configurando clave SSH, sudo sin contraseña para aprovisionamiento y hostname en '$vm' (puerto $port)..."
         ssh_nat "$port" "echo $GUEST_PASS | sudo -S bash -c '
             hostnamectl set-hostname $vm
@@ -371,10 +389,11 @@ cmd_full() {
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store init
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store issue-server
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store issue-client dev-01 dev 10
+        bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store issue-client dev-02 dev 11
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store issue-client admin-01 sysadmin 20
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store issue-client gw-sucursal sucursal 30
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store export-server /tmp/gw-vpn-bundle
-        for c in dev-01 admin-01 gw-sucursal; do
+        for c in dev-01 dev-02 admin-01 gw-sucursal; do
             bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/pki.sh /root/ca-store export-client \$c /tmp/\$c.ovpn
         done
         chown -R $GUEST_USER:$GUEST_USER /tmp/gw-vpn-bundle /tmp/*.ovpn
@@ -382,6 +401,7 @@ cmd_full() {
     rm -rf "$BUNDLES_DIR/gw-vpn-bundle"
     scp_nat 2203 -r "$GUEST_USER@127.0.0.1:/tmp/gw-vpn-bundle" "$BUNDLES_DIR/gw-vpn-bundle"
     scp_nat 2203 "$GUEST_USER@127.0.0.1:/tmp/dev-01.ovpn" "$PROFILES_DIR/dev-01.ovpn"
+    scp_nat 2203 "$GUEST_USER@127.0.0.1:/tmp/dev-02.ovpn" "$PROFILES_DIR/dev-02.ovpn"
     scp_nat 2203 "$GUEST_USER@127.0.0.1:/tmp/admin-01.ovpn" "$PROFILES_DIR/admin-01.ovpn"
     scp_nat 2203 "$GUEST_USER@127.0.0.1:/tmp/gw-sucursal.ovpn" "$PROFILES_DIR/gw-sucursal.ovpn"
     ok "PKI generada en 'ca' y perfiles/bundle descargados en $PROFILES_DIR y $BUNDLES_DIR."
@@ -399,16 +419,7 @@ cmd_full() {
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/provision/cli-adm.sh /tmp/admin-01.ovpn $MAC_CLI_ADM_WAN
         install -m 600 -o $GUEST_USER -g $GUEST_USER /tmp/sysadmin_ed25519 /home/$GUEST_USER/.ssh/id_ed25519
         install -m 644 -o $GUEST_USER -g $GUEST_USER /tmp/sysadmin_ed25519.pub /home/$GUEST_USER/.ssh/id_ed25519.pub
-        mkdir -p /etc/systemd/system/openvpn-client@the-store.service.d
-        cat > /etc/systemd/system/openvpn-client@the-store.service.d/restart.conf <<\"EOF\"
-[Unit]
-After=network-online.target systemd-networkd-wait-online.service
-Wants=network-online.target systemd-networkd-wait-online.service
-[Service]
-Restart=always
-RestartSec=3
-ExecStartPost=/bin/bash -c \"for i in {1..20}; do if ip -4 addr show dev tun0 2>/dev/null | grep -q 10.8.0.; then resolvectl dns tun0 10.8.0.1 && resolvectl domain tun0 ~the-store.internal && exit 0; fi; sleep 1; done; exit 0\"
-EOF
+        install -D -m 644 /home/$GUEST_USER/Redes-TPE/infra/remote-access/clients/cli-adm/openvpn-restart.conf /etc/systemd/system/openvpn-client@the-store.service.d/restart.conf
         systemctl daemon-reload
     '"
     ok "'cli-adm' aprovisionado."
@@ -422,14 +433,23 @@ EOF
     step "Aprovisionando 'k8s-node' (puerto 2202), construyendo imágenes y desplegando el cluster Kind..."
     scp_nat 2202 "$SYSADMIN_KEY.pub" "$GUEST_USER@127.0.0.1:/tmp/sysadmin_ed25519.pub"
     ssh_nat 2202 "echo $GUEST_PASS | sudo -S bash -c '
+        set -e
         bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/provision/k8s-node.sh /tmp/sysadmin_ed25519.pub $MAC_K8S_NODE_LAN
         usermod -aG docker $GUEST_USER
+        install -m 600 /home/$GUEST_USER/Redes-TPE/infra/remote-access/scripts/nat-temporal.yaml /etc/netplan/91-nat-temporal.yaml
         netplan apply
-        [[ -x /usr/local/bin/kind ]] || { curl -fsSL -o /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 && chmod +x /usr/local/bin/kind; }
-        [[ -x /usr/local/bin/kubectl ]] || { KVER=\$(curl -fsSL https://dl.k8s.io/release/stable.txt) && curl -fsSL -o /usr/local/bin/kubectl \"https://dl.k8s.io/release/\$KVER/bin/linux/amd64/kubectl\" && chmod +x /usr/local/bin/kubectl; }
-        su - $GUEST_USER -c \"cd /home/$GUEST_USER/Redes-TPE && ./local.sh build && ./local.sh create-cluster --remote-access --skip-tests\"
+        # La ruta por defecto de gw-vpn (sin Internet) le gana a la del NAT: se descarta mientras se instala.
+        /lib/systemd/systemd-networkd-wait-online -i eth0 -i enp0s3 --timeout=60
+        ip route del default via 10.10.0.1 dev eth0
+        curl -fsS -m 5 -o /dev/null https://kind.sigs.k8s.io
+        [[ -x /usr/local/bin/kind ]] || curl -fsSL -o /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+        [[ -x /usr/local/bin/kubectl ]] || curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+        chmod +x /usr/local/bin/kind /usr/local/bin/kubectl
+        su - $GUEST_USER -c \"cd /home/$GUEST_USER/Redes-TPE && ./local.sh create-cluster --remote-access --skip-tests\"
+        docker update --restart=unless-stopped the-store-control-plane
         su - $GUEST_USER -c \"cd /home/$GUEST_USER/Redes-TPE && REQUIRE_CLUSTER=1 bash infra/remote-access/tests/kubernetes.sh\"
         su - $GUEST_USER -c \"cd /home/$GUEST_USER/Redes-TPE && bash infra/remote-access/scripts/sysadmin-kubeconfig.sh /tmp/sysadmin.kubeconfig\"
+        rm -f /etc/netplan/91-nat-temporal.yaml
     '"
     scp_nat 2202 "$GUEST_USER@127.0.0.1:/usr/local/bin/kubectl" "$PROFILES_DIR/kubectl"
     scp_nat 2202 "$GUEST_USER@127.0.0.1:/tmp/sysadmin.kubeconfig" "$PROFILES_DIR/sysadmin.kubeconfig"
@@ -460,20 +480,7 @@ EOF
 # ------------------------------------------------------------------------------
 # Punto de entrada principal (con pausa interactiva y log en archivo)
 # ------------------------------------------------------------------------------
-mkdir -p "$PROFILES_DIR"
-LOG_FILE="$PROFILES_DIR/setup-lab.log"
-NO_PAUSE=${NO_PAUSE:-0}
 [[ "${2:-}" == "--no-pause" ]] && NO_PAUSE=1
-
-on_exit() {
-    local code=$?
-    printf "\n${C_CYAN}[LOG]${C_RESET} Salida completa guardada en: %s\n" "$LOG_FILE"
-    if [[ -t 0 && "$NO_PAUSE" == "0" ]]; then
-        printf "\n${C_BOLD}${C_YELLOW}Ejecución finalizada (código %d). Presioná ENTER para cerrar...${C_RESET}" "$code"
-        read -r _ || true
-    fi
-}
-trap on_exit EXIT
 
 ACTION=${1:-}
 if [[ -z "$ACTION" && -t 0 ]]; then
@@ -482,9 +489,9 @@ if [[ -z "$ACTION" && -t 0 ]]; then
     echo "  2) verify      - Ejecutar pruebas integrales punta a punta (CA, Sysadmin, K8s, Sucursal)"
     echo "  3) reset-demo  - Apagar VMs, restaurar snapshot 'demo', iniciar y verificar"
     echo "  4) start       - Iniciar las 6 VMs en segundo plano"
-    echo "  5) stop        - Apagar las 6 VMs limpiamente"
-    echo "  6) full        - Desplegar Pasos 3 a 8 desde cero a partir de 'the-store-base'"
-    echo "  7) eval        - Simular Evaluación/Defensa completa del Profesor (CU1..CU5 + Revocación)"
+    echo "  5) stop        - Apagar las 6 VMs"
+    echo "  6) full        - Desplegar los Pasos 1 a 8 desde cero"
+    echo "  7) eval        - Simular la corrección de la defensa (CU1..CU6)"
     echo ""
     printf "Elegí una opción [1-7 o nombre, Enter=1 (status)]: "
     read -r choice || true
@@ -509,7 +516,7 @@ case "$ACTION" in
     reset-demo|restore) cmd_reset_demo ;;
     start)              start_all_vms; wait_for_offline_hosts ;;
     stop)               stop_all_vms ;;
-    eval|profesor)      NO_PAUSE=1 bash "$SCRIPT_DIR/evaluacion-profesor.sh" --no-pause ;;
+    eval|profesor)      bash "$SCRIPT_DIR/eval.sh" --no-pause ;;
     *)
         echo "Uso: $0 {status|verify|reset-demo|start|stop|full|eval}" >&2
         exit 1

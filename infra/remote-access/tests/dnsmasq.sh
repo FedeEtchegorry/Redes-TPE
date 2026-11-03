@@ -15,11 +15,11 @@ resolves_to_node() {
     [[ $answer == "$NODE_IP" ]]
 }
 
-# answers_status NAME STATUS: the DNS status of the answer (NXDOMAIN, REFUSED, ...).
+# answers_status NAME STATUS [TYPE]: the DNS status of the answer (NXDOMAIN, REFUSED, ...).
 answers_status() {
     local status
-    status=$(dig @127.0.0.1 -p "$PORT" +time=2 +tries=1 "$1" A | grep -o 'status: [A-Z]*')
-    echo "$1 -> ${status:-no answer}"
+    status=$(dig @127.0.0.1 -p "$PORT" +time=2 +tries=1 "$1" "${3:-A}" | grep -o 'status: [A-Z]*')
+    echo "$1 ${3:-A} -> ${status:-no answer}"
     [[ $status == "status: $2" ]]
 }
 
@@ -31,6 +31,7 @@ sleep 1
 
 for service in ui catalog carts orders checkout; do
     run "$service.the-store.internal resolves to $NODE_IP" resolves_to_node "$service.the-store.internal"
+    run "$service.the-store.internal AAAA is NOERROR (no data), not NXDOMAIN" answers_status "$service.the-store.internal" NOERROR AAAA
 done
 run "Unknown name in the-store.internal gets NXDOMAIN" answers_status unknown.the-store.internal NXDOMAIN
 run "External name gets REFUSED" answers_status example.com REFUSED

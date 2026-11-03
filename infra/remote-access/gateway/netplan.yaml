@@ -1,0 +1,24 @@
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "@ETH0_MAC@"
+      set-name: eth0
+      dhcp4: false
+      addresses:
+        - 203.0.113.10/24
+    eth1:
+      match:
+        macaddress: "@ETH1_MAC@"
+      set-name: eth1
+      dhcp4: false
+      addresses:
+        - 10.10.0.1/16
+    eth2:
+      match:
+        macaddress: "@ETH2_MAC@"
+      set-name: eth2
+      dhcp4: false
+      addresses:
+        - 192.168.100.1/24

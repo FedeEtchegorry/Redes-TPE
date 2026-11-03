@@ -21,5 +21,5 @@ chmod 644 "$DESTDIR/root/.ssh/id_ed25519.pub"
 install_packages easy-rsa openvpn openssh-client
 
 # Configure static network on the management subnet
-gateway_netplan eth0 "$ETH0_MAC" 192.168.100.20/24 | install_netplan
+sed "s/@ETH0_MAC@/$ETH0_MAC/" "$ROOT/ca/netplan.yaml" | install_netplan
 echo "ca is provisioned: run netplan apply or reboot to apply the network configuration."
