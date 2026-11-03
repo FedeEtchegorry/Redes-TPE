@@ -16,7 +16,7 @@ MGMT_HOST_IP=192.168.100.254
 # NAME MEMORY_MB CPUS NETWORK... : NETWORK n is ethN-1, in the order of provision/NAME.sh.
 VMS=(
     "gw-vpn 1024 1 wan lan mgmt"
-    "k8s-node 6144 4 lan"
+    "k8s-node 6144 1 lan"
     "ca 1024 1 mgmt"
     "cli-adm 1024 1 wan"
     "gw-sucursal 1024 1 wan branch"

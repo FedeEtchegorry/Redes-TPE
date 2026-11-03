@@ -115,7 +115,7 @@ spec:
             limits:
               memory: 256Mi
             requests:
-              cpu: 256m
+              cpu: 10m
               memory: 256Mi
           volumeMounts:
             - mountPath: /tmp
@@ -237,7 +237,7 @@ spec:
             limits:
               memory: 512Mi
             requests:
-              cpu: 256m
+              cpu: 10m
               memory: 512Mi
           volumeMounts:
             - mountPath: /tmp
@@ -376,7 +376,7 @@ spec:
             limits:
               memory: 512Mi
             requests:
-              cpu: 256m
+              cpu: 10m
               memory: 512Mi
           volumeMounts:
             - mountPath: /tmp
@@ -494,7 +494,7 @@ spec:
             limits:
               memory: 256Mi
             requests:
-              cpu: 128m
+              cpu: 10m
               memory: 256Mi
           volumeMounts:
             - mountPath: /tmp
@@ -633,7 +633,7 @@ spec:
             limits:
               memory: 512Mi
             requests:
-              cpu: 128m
+              cpu: 10m
               memory: 512Mi
           volumeMounts:
             - mountPath: /tmp

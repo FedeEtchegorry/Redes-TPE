@@ -22,7 +22,7 @@ service_responds() {
     fi
     options=(--noproxy '*' --silent --show-error --connect-timeout 2 --max-time 10
         --resolve "$1.the-store.internal:80:$NODE_IP" "http://$1.the-store.internal$path")
-    curl "${options[@]}" --fail --retry "$((INGRESS_WAIT / 3))" --retry-delay 3 --output /dev/null || {
+    curl "${options[@]}" --fail --retry "$((INGRESS_WAIT / 3))" --retry-delay 3 --retry-all-errors --output /dev/null || {
         curl "${options[@]}"
         return 1
     }

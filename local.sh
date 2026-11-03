@@ -106,6 +106,10 @@ EOF
         print_success "Cluster '$CLUSTER_NAME' is ready"
     fi
 
+    if [ "$(nproc)" -le 2 ]; then
+        docker exec "$CLUSTER_NAME-control-plane" sh -c "sed -i 's/cpu: [0-9]*m/cpu: 10m/g' /etc/kubernetes/manifests/*.yaml" || true
+    fi
+
     print_status "Waiting for cluster to be ready..."
     kubectl wait --for=condition=Ready nodes --all --timeout=300s
     print_success "Cluster is ready"
