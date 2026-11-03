@@ -39,15 +39,15 @@ CA_KEY="$PROFILES_DIR/ca_ed25519"
 SYSADMIN_KEY="$PROFILES_DIR/sysadmin_ed25519"
 
 # Direcciones MAC fijas asignadas por virtualbox.sh en las interfaces internas (NIC 2+)
-MAC_GW_VPN_WAN="08:00:27:a0:01:02"
-MAC_GW_VPN_LAN="08:00:27:a0:01:03"
-MAC_GW_VPN_MGMT="08:00:27:a0:01:04"
-MAC_K8S_NODE_LAN="08:00:27:a0:02:02"
-MAC_CA_MGMT="08:00:27:a0:03:02"
-MAC_CLI_ADM_WAN="08:00:27:a0:04:02"
-MAC_GW_SUC_WAN="08:00:27:a0:05:02"
-MAC_GW_SUC_BRANCH="08:00:27:a0:05:03"
-MAC_HOST_SUC_BRANCH="08:00:27:a0:06:02"
+MAC_GW_VPN_WAN="08:00:27:00:01:01"
+MAC_GW_VPN_LAN="08:00:27:00:01:02"
+MAC_GW_VPN_MGMT="08:00:27:00:01:03"
+MAC_K8S_NODE_LAN="08:00:27:00:02:01"
+MAC_CA_MGMT="08:00:27:00:03:01"
+MAC_CLI_ADM_WAN="08:00:27:00:04:01"
+MAC_GW_SUC_WAN="08:00:27:00:05:01"
+MAC_GW_SUC_BRANCH="08:00:27:00:05:02"
+MAC_HOST_SUC_BRANCH="08:00:27:00:06:01"
 
 ALL_VMS=(gw-vpn k8s-node ca cli-adm gw-sucursal host-suc)
 
@@ -296,6 +296,23 @@ cmd_reset_demo() {
 # ------------------------------------------------------------------------------
 cmd_full() {
     banner "DESPLIEGUE COMPLETO DEL LABORATORIO DESDE 'the-store-base' (PASOS 3 A 8)"
+
+    if "$VBOX" snapshot gw-vpn list 2>/dev/null | grep -q "Name: demo (" && [[ "${RECREATE:-0}" != "1" ]]; then
+        info "Las 6 VMs ya existen, ya fueron aprovisionadas y están en modo OFFLINE (sin NAT en puertos 2201-2206)."
+        info "Restaurando el snapshot 'demo' y ejecutando la verificación completa..."
+        info "(Si querés borrar las 6 VMs y reconstruir desde cero con NAT, ejecutá con RECREATE=1)."
+        cmd_reset_demo
+        cmd_verify
+        return 0
+    fi
+
+    if [[ "${RECREATE:-0}" == "1" ]]; then
+        stop_all_vms
+        step "Eliminando clones existentes para reconstruir desde 'the-store-base'..."
+        for vm in "${ALL_VMS[@]}"; do
+            "$VBOX" unregistervm "$vm" --delete 2>/dev/null || true
+        done
+    fi
 
     step "Paso 3: Creando los 6 clones vinculados desde 'the-store-base'..."
     bash "$SCRIPT_DIR/virtualbox.sh" clones
