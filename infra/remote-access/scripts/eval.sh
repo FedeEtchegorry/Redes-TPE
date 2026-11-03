@@ -32,9 +32,6 @@ scp_ip() { scp "${SSH_OPTS[@]}" "$@"; }
 run_evaluation() {
     banner "SIMULACIÓN DE EVALUACIÓN Y CORRECCIÓN DEL PROFESOR — REDES TPE"
 
-    # ==========================================================================
-    # ETAPA 0: Preparación limpia desde el snapshot 'demo'
-    # ==========================================================================
     banner "ETAPA 0: RESTAURACIÓN DE SNAPSHOT 'demo' Y VERIFICACIÓN DE AISLAMIENTO OFFLINE"
 
     substep "0.1 Verificando o restaurando el snapshot 'demo' en las 6 VMs..."
@@ -52,14 +49,11 @@ run_evaluation() {
         [[ "$nic1" == "none" ]] || offline_ok=0
     done
     if [[ "$offline_ok" -eq 1 ]]; then
-        pass_check "Las 6 VMs tienen NIC 1 deshabilitada (nic1=none, 100% sin Internet)."
+        pass_check "Las 6 VMs tienen NIC 1 deshabilitada (nic1=none, sin Internet)."
     else
         fail_check "Alguna VM aún tiene NIC 1 habilitada."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 1 (CU1): Seguridad en WAN, Ruteo Directo, Stealth 1194 y Hardening
-    # ==========================================================================
     banner "ESCENARIO 1 (CU1): SEGURIDAD EN SEGMENTO NO CONFIABLE (WAN) Y HARDENING"
 
     substep "1.1 Escaneo/conexión desde WAN (203.0.113.51) hacia SSH y HTTP de gw-vpn (203.0.113.10)..."
@@ -112,9 +106,6 @@ run_evaluation() {
         fail_check "Configuración de privilegios de OpenVPN ($ovpn_user) o sshd ($sshd_listen) incorrecta."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 2 (CU2, CU3 y CU5): Desarrollador (dev-01, 10.8.0.10)
-    # ==========================================================================
     banner "ESCENARIO 2 (CU2, CU3 y CU5): DESARROLLADOR (dev-01, 10.8.0.10)"
 
     substep "2.1 Levantando cliente 'dev-01' (10.8.0.10) en un namespace de red aislado (en paralelo con admin-01 y gw-sucursal)..."
@@ -228,9 +219,6 @@ run_evaluation() {
     fi
     rm -f "$wan_cap" "$lan_cap"
 
-    # ==========================================================================
-    # ESCENARIO 3 (CU3): Sysadmin (admin-01, 10.8.0.20) — SSH, K8s API y RBAC
-    # ==========================================================================
     banner "ESCENARIO 3 (CU3): SYSADMIN (admin-01, 10.8.0.20) — ADMINISTRACIÓN Y MENOR PRIVILEGIO (RBAC)"
 
     substep "3.1 Acceso SSH como root@10.10.10.5 desde cli-adm (10.8.0.20) con clave ed25519..."
@@ -289,9 +277,6 @@ run_evaluation() {
         fail_check "El Sysadmin pudo alcanzar SSH del Gateway o de la CA."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 4 (CU6): host-suc (172.16.20.10) a través de gw-sucursal
-    # ==========================================================================
     banner "ESCENARIO 4 (CU6, SUCURSAL SITE-TO-SITE): HOST DE SUCURSAL (172.16.20.10 -> 10.8.0.30)"
 
     substep "4.1 Verificando desde 'host-suc' (172.16.20.10) ausencia de cliente VPN local, DNS split-horizon, acceso HTTP y bloqueo de puertos..."
@@ -324,9 +309,6 @@ run_evaluation() {
         fail_check "Fallo en las validaciones de la sucursal."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 5 (CU4): Revocación en Caliente de dev-01 desde la CA (192.168.100.20)
-    # ==========================================================================
     banner "ESCENARIO 5 (CU4): REVOCACIÓN EN CALIENTE DE 'dev-01' DESDE LA CA Y CORTE INMEDIATO"
 
     substep "5.1 Verificando que ANTES de revocar están los 3 clientes conectados en gw-vpn (dev-01, admin-01 y gw-sucursal)..."
@@ -394,9 +376,6 @@ run_evaluation() {
         fail_check "No se registró el rechazo por CRL en los logs de gw-vpn."
     fi
 
-    # ==========================================================================
-    # ETAPA FINAL: Restauración rápida del snapshot 'demo'
-    # ==========================================================================
     banner "ETAPA FINAL: RESTAURACIÓN DEL SNAPSHOT 'demo' PARA DEJAR EL LABORATORIO LIMPIO"
     bash "$SCRIPT_DIR/setup-lab.sh" stop --no-pause
     substep "Restaurando snapshot 'demo' en las 6 VMs con 'virtualbox.sh restore'..."
@@ -409,9 +388,6 @@ run_evaluation() {
     done
     info "Snapshot 'demo' restaurado y las 6 VMs iniciadas (dev-01 vuelve a estar habilitado)."
 
-    # ==========================================================================
-    # RESUMEN DE CALIFICACIÓN
-    # ==========================================================================
     banner "RESULTADO FINAL DE LA EVALUACIÓN DEL PROFESOR"
     log_out "  Controles evaluados : $TOTAL_CHECKS\n"
     log_out "  Controles aprobados : ${C_GREEN}$PASSED_CHECKS${C_RESET}\n"

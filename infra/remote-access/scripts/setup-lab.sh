@@ -1,27 +1,12 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# setup-lab.sh — Orquestador Automatizado del Laboratorio VirtualBox (Redes-TPE)
-# ==============================================================================
-# Prepara, aprovisiona, verifica y restaura el entorno completo de 6 VMs:
-#   - gw-vpn      (203.0.113.10 WAN | 10.10.0.1 LAN | 192.168.100.1 MGMT | 10.8.0.1 VPN)
-#   - k8s-node    (10.10.10.5 LAN   | Kind Cluster + Ingress + 5 microservicios)
-#   - ca          (192.168.100.20 MGMT | EasyRSA 3 PKI fuera de banda)
-#   - cli-adm     (203.0.113.51 WAN | 10.8.0.20 VPN sysadmin)
-#   - gw-sucursal (203.0.113.20 WAN | 172.16.20.1 Sucursal | 10.8.0.30 VPN site-to-site)
-#   - host-suc    (172.16.20.10 Sucursal)
-#
-# Uso:
-#   bash infra/remote-access/scripts/setup-lab.sh [comando]
-#
-# Comandos disponibles:
-#   full        Ejecuta los Pasos 1 a 8 desde cero (crea redes y 'the-store-base' con Ubuntu si faltan)
-#   status      Muestra el estado detallado de redes, VMs, túneles VPN y pods K8s
-#   verify      Ejecuta la batería de pruebas punta a punta (CA, Sysadmin, Sucursal, Dev)
-#   reset-demo  Apaga las 6 VMs, restaura el snapshot 'demo', las inicia y verifica todo
-#   start       Inicia las 6 VMs en segundo plano (headless) y espera a que estén listas
+# Laboratorio VirtualBox de 6 VMs. Uso: setup-lab.sh [comando]
+#   full        Pasos 1 a 8 desde cero (crea redes y 'the-store-base' con Ubuntu si faltan)
+#   status      Estado de redes, VMs, túneles VPN y pods K8s
+#   verify      Pruebas punta a punta (CA, Sysadmin, Sucursal, Dev)
+#   reset-demo  Apaga las 6 VMs, restaura el snapshot 'demo', las inicia y verifica
+#   start       Inicia las 6 VMs (headless) y espera a que estén listas
 #   stop        Apaga las 6 VMs
 #   eval        Simula la corrección de la defensa (CU1..CU6); restaura el snapshot 'demo' al empezar y al terminar
-# ==============================================================================
 
 set -euo pipefail
 
@@ -72,9 +57,6 @@ install_host_key() {
     [[ $rc == 0 ]] || err "La VM del puerto $port no aceptó la contraseña de '$GUEST_USER' o no respondió por SSH: $out"
 }
 
-# ------------------------------------------------------------------------------
-# Funciones de ciclo de vida de VMs
-# ------------------------------------------------------------------------------
 start_all_vms() {
     step "Iniciando las 6 VMs en modo headless (segundo plano)..."
     local running vm
@@ -197,9 +179,6 @@ EOF
     ok "CRL publicada y kubeconfig de sysadmin renovado en cli-adm (kubectl get pods OK)."
 }
 
-# ------------------------------------------------------------------------------
-# Comando: status
-# ------------------------------------------------------------------------------
 cmd_status() {
     banner "ESTADO DEL LABORATORIO VIRTUALBOX (REDES-TPE)"
 
@@ -231,9 +210,6 @@ cmd_status() {
     fi
 }
 
-# ------------------------------------------------------------------------------
-# Comando: verify (Pruebas integrales punta a punta en modo offline)
-# ------------------------------------------------------------------------------
 cmd_verify() {
     banner "VERIFICACIÓN INTEGRAL PUNTA A PUNTA (MODO OFFLINE)"
     wait_for_offline_hosts
@@ -267,7 +243,7 @@ cmd_verify() {
 
     step "3. Ejecutando suite 'tests/kubernetes.sh' directamente en 'k8s-node' (10.10.10.5)..."
     ssh_ip 203.0.113.51 "ssh -o StrictHostKeyChecking=no root@10.10.10.5 'export PATH=/usr/local/bin:\$PATH; KUBECONFIG=/home/$GUEST_USER/.kube/config REQUIRE_CLUSTER=1 bash /home/$GUEST_USER/Redes-TPE/infra/remote-access/tests/kubernetes.sh'" | sed 's/^/     /'
-    ok "Suite kubernetes.sh completada (13/13 controles OK)."
+    ok "Suite kubernetes.sh completada."
 
     step "4. Probando LAN de Sucursal desde 'host-suc' (172.16.20.10 -> gw-sucursal 172.16.20.1 -> túnel 10.8.0.30)..."
     MSYS2_ARG_CONV_EXCL="*" "$VBOX" guestcontrol host-suc run --exe /bin/bash --username "$GUEST_USER" --password "$GUEST_PASS" -- -c '
@@ -296,12 +272,9 @@ cmd_verify() {
     '
     ok "Todas las verificaciones de la Sucursal (host-suc + gw-sucursal) pasaron."
 
-    banner "¡VERIFICACIÓN COMPLETA EXITOSA! TODOS LOS SISTEMAS OPERATIVOS"
+    banner "VERIFICACIÓN COMPLETA"
 }
 
-# ------------------------------------------------------------------------------
-# Comando: reset-demo (Restaurar snapshot 'demo' y levantar laboratorio)
-# ------------------------------------------------------------------------------
 cmd_reset_demo() {
     banner "RESTAURACIÓN DEL SNAPSHOT 'demo' EN LAS 6 VMs"
     stop_all_vms
@@ -314,9 +287,6 @@ cmd_reset_demo() {
     banner "ENTORNO RESTAURADO Y LISTO PARA DEMO"
 }
 
-# ------------------------------------------------------------------------------
-# Comando: full (Aprovisionamiento completo Pasos 3 a 8 desde the-store-base)
-# ------------------------------------------------------------------------------
 cmd_full() {
     banner "DESPLIEGUE COMPLETO DEL LABORATORIO DESDE 'the-store-base' (PASOS 1 A 8)"
 
@@ -474,12 +444,9 @@ cmd_full() {
     ok "Snapshot 'demo' creado."
     start_all_vms
     wait_for_offline_hosts
-    banner "¡LABORATORIO COMPLETAMENTE DESPLEGADO, VERIFICADO Y SNAPSHOTEADO!"
+    banner "LABORATORIO DESPLEGADO Y SNAPSHOTEADO"
 }
 
-# ------------------------------------------------------------------------------
-# Punto de entrada principal (con pausa interactiva y log en archivo)
-# ------------------------------------------------------------------------------
 [[ "${2:-}" == "--no-pause" ]] && NO_PAUSE=1
 
 ACTION=${1:-}
@@ -522,5 +489,4 @@ case "$ACTION" in
         exit 1
         ;;
 esac
-
 
