@@ -509,7 +509,13 @@ case "$ACTION" in
     reset-demo|restore) cmd_reset_demo ;;
     start)              start_all_vms; wait_for_offline_hosts ;;
     stop)               stop_all_vms ;;
-    eval|profesor)      NO_PAUSE=1 bash "$SCRIPT_DIR/evaluacion-profesor.sh" --no-pause ;;
+    eval|profesor)
+        if [[ -f "$SCRIPT_DIR/eval.sh" ]]; then
+            NO_PAUSE=1 bash "$SCRIPT_DIR/eval.sh" --no-pause
+        else
+            NO_PAUSE=1 bash "$SCRIPT_DIR/evaluacion-profesor.sh" --no-pause
+        fi
+        ;;
     *)
         echo "Uso: $0 {status|verify|reset-demo|start|stop|full|eval}" >&2
         exit 1
