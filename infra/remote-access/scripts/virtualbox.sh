@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # VirtualBox lab of the POC:
-#   virtualbox.sh networks | base ISO | clones | macs | offline | online | snapshot | restore
+#   virtualbox.sh networks | base [ISO] | clones | macs | offline | online | snapshot | restore
 # The host is the Windows dev client (203.0.113.50). On a Linux host, /etc/vbox/networks.conf
 # must allow the ranges: "* 203.0.113.0/24 192.168.100.0/24".
 set -euo pipefail
 
-ACTION=${1:?Usage: virtualbox.sh networks|base ISO|clones|macs|offline|online|snapshot|restore}
+ACTION=${1:?Usage: virtualbox.sh networks|base [ISO]|clones|macs|offline|online|snapshot|restore}
 VBOXMANAGE=${VBOXMANAGE:-$(command -v VBoxManage || echo "/c/Program Files/Oracle/VirtualBox/VBoxManage.exe")}
 BASE=the-store-base
 SNAPSHOT=installed
 DEMO=demo
 WAN_HOST_IP=203.0.113.50
 MGMT_HOST_IP=192.168.100.254
+GUEST_USER=${GUEST_USER:-home}
+GUEST_PASS=${GUEST_PASS:-bishbashbosh}
 
 # NAME MEMORY_MB CPUS NETWORK... : NETWORK n is ethN-1, in the order of provision/NAME.sh.
 VMS=(
@@ -33,6 +35,28 @@ vbox() { "$VBOXMANAGE" "$@" | tr -d '\r'; }
 exists() { vbox showvminfo "$1" > /dev/null 2>&1; }
 
 has_snapshot() { vbox showvminfo "$1" --machinereadable | grep -q "^SnapshotName.*=\"$2\""; }
+
+hostpath() { if command -v cygpath > /dev/null; then cygpath -u "$1"; else echo "$1"; fi; }
+winpath() { if command -v cygpath > /dev/null; then cygpath -w "$1"; else echo "$1"; fi; }
+
+download_iso() {
+    local url=https://releases.ubuntu.com/24.04 sum name
+    read -r sum name <<< "$(curl -fsS "$url/SHA256SUMS" | grep live-server | tail -1)"
+    name=${name#\*}
+    [[ -n $name ]] || fail "No Ubuntu Server ISO found in $url"
+    mkdir -p "$1"
+    [[ -f $1/$name ]] || curl -fL -C - --retry 5 -o "$1/$name" "$url/$name" >&2
+    echo "$sum  $1/$name" | sha256sum -c --status || fail "Wrong checksum: $1/$name"
+    echo "$1/$name"
+}
+
+autoinstall() {
+    local dir=$1 iso=$2
+    cp "$(dirname "${BASH_SOURCE[0]}")/grub.cfg" "$dir/grub.cfg"
+    sed -e "s|@HOSTNAME@|$BASE|" -e "s|@USERNAME@|$GUEST_USER|g" -e "s|@PASSWORD_HASH@|$(openssl passwd -6 "$GUEST_PASS")|" \
+        "$(dirname "${BASH_SOURCE[0]}")/autoinstall.yaml" > "$dir/autoinstall.yaml"
+    printf '%s' "--iprt-iso-maker-file-marker-bourne-sh 27d283cc-9daf-4385-9a2d-ecd501118cc7 --file-mode=0444 --dir-mode=0555 --no-file-mode --no-dir-mode --import-iso '$(winpath "$iso")' --file-mode=0444 --dir-mode=0555 /boot/grub/grub.cfg=:must-remove: '/boot/grub/grub.cfg=$(winpath "$dir/grub.cfg")' '/autoinstall.yaml=$(winpath "$dir/autoinstall.yaml")'" > "$dir/boot.viso"
+}
 
 # mac VM NIC: 08:00:27 (VirtualBox) : VM : NIC, fixed so that provisioning knows it in advance.
 mac() { printf '08:00:27:00:%02x:%02x' "$1" "$2"; }
@@ -137,20 +161,34 @@ case "$ACTION" in
         echo "Management: $(hostonly "$MGMT_HOST_IP")"
         ;;
     base)
-        ISO=${2:?Missing Ubuntu Server ISO}
         exists "$BASE" && fail "$BASE already exists"
         FOLDER=$(vbox list systemproperties | sed -n 's/^Default machine folder: *//p')
+        ISO=${2:-}
+        [[ -n $ISO ]] || ISO=$(download_iso "$(hostpath "$FOLDER")/ISO")
         vbox createvm --name "$BASE" --ostype Ubuntu_64 --register
-        vbox modifyvm "$BASE" --memory 2048 --cpus 2 --nic1 nat --audio-enabled off
+        # UTC clock (apt rejects the repositories as "not valid yet" otherwise). 4 GB and 1 CPU only for the install;
+        # the clones set their own.
+        vbox modifyvm "$BASE" --memory 4096 --cpus 1 --nic1 nat --audio-enabled off --rtcuseutc on
         # Dynamic disk: the clones only store their changes, k8s-node needs the most.
         vbox createmedium disk --filename "$FOLDER/$BASE/$BASE.vdi" --size 30000
         vbox storagectl "$BASE" --name SATA --add sata
         vbox storageattach "$BASE" --storagectl SATA --port 0 --type hdd --medium "$FOLDER/$BASE/$BASE.vdi"
-        vbox storageattach "$BASE" --storagectl SATA --port 1 --type dvddrive --medium "$ISO"
-        echo "Install Ubuntu Server with OpenSSH in $BASE, shut it down, then run: virtualbox.sh clones"
+        SEED=$(hostpath "$FOLDER")/$BASE
+        autoinstall "$SEED" "$ISO"
+        vbox storageattach "$BASE" --storagectl SATA --port 1 --type dvddrive --medium "$(winpath "$SEED/boot.viso")"
+        vbox startvm "$BASE" --type headless
+        echo "Installing Ubuntu Server in $BASE (about 10 minutes)..."
+        for _ in {1..240}; do
+            sleep 10
+            vbox showvminfo "$BASE" --machinereadable | grep -q '^VMState="poweroff"' && break
+        done
+        vbox showvminfo "$BASE" --machinereadable | grep -q '^VMState="poweroff"' ||
+            fail "The installation of $BASE did not finish in 40 minutes: look at the screen of the VM"
+        vbox storageattach "$BASE" --storagectl SATA --port 1 --type dvddrive --medium emptydrive
+        echo "$BASE is installed: run virtualbox.sh clones"
         ;;
     clones)
-        exists "$BASE" || fail "Run virtualbox.sh base ISO first"
+        exists "$BASE" || fail "Run virtualbox.sh base first"
         WAN_IF=$(hostonly_name "$WAN_HOST_IP")
         MGMT_IF=$(hostonly_name "$MGMT_HOST_IP")
         [[ -n $WAN_IF && -n $MGMT_IF ]] || fail "Run virtualbox.sh networks first"

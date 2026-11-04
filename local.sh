@@ -108,6 +108,8 @@ EOF
 
     if [ "$(nproc)" -le 2 ]; then
         docker exec "$CLUSTER_NAME-control-plane" sh -c "sed -i 's/cpu: [0-9]*m/cpu: 10m/g' /etc/kubernetes/manifests/*.yaml" || true
+        # kubelet restarts the control plane when its manifests change: wait for the API to answer again
+        for _ in {1..60}; do kubectl wait --for=condition=Ready nodes --all --timeout=5s &> /dev/null && break; sleep 5; done
     fi
 
     print_status "Waiting for cluster to be ready..."

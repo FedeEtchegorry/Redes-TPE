@@ -1,70 +1,16 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# evaluacion-profesor.sh — Simulación Completa de Corrección / Defensa del TPE
-# ==============================================================================
-# Ejecuta de punta a punta todos los Casos de Uso (CU1, CU2, CU3, CU4, CU5 y
-# Sucursal Site-to-Site) tal como los evaluaría el profesor en la defensa:
-#   - Etapa 0: Restauración de snapshot 'demo' y verificación de modo OFFLINE
-#   - Escenario 1 (CU1): Escaneo desde WAN, intento de ruteo directo, stealth UDP 1194 y hardening
-#   - Escenario 2 (CU2/CU5): Desarrollador (dev-01, 10.8.0.10) — DNS, compra real en tienda y bloqueo firewall
-#   - Escenario 3 (CU3): Sysadmin (admin-01, 10.8.0.20) — SSH root, K8s API y pruebas de menor privilegio RBAC
-#   - Escenario 4 (Sucursal): Host de sucursal (host-suc, 172.16.20.10) — DNS, tienda y aislamiento
-#   - Escenario 5 (CU4): Revocación en vivo de dev-01 desde CA, expulsión inmediata sin afectar a otros clientes
-#   - Etapa Final: Restauración del snapshot 'demo' para dejar el laboratorio limpio
-# ==============================================================================
+# Simula la corrección de la defensa contra el laboratorio (CU1..CU6). Restaura el snapshot 'demo'
+# al empezar y al terminar. Uso: eval.sh [--no-pause]  (o: setup-lab.sh eval)
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REMOTE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-PROFILES_DIR="$REMOTE_DIR/profiles"
-HOST_KEY="$PROFILES_DIR/host_admin_ed25519"
-GUEST_USER=${GUEST_USER:-home}
-GUEST_PASS=${GUEST_PASS:-bishbashbosh}
-CA_PASS=${CA_PASS:-$GUEST_PASS}
-NO_PAUSE=${NO_PAUSE:-0}
+LOG_NAME="eval"
+source "$(dirname "${BASH_SOURCE[0]}")/lab-common.sh"
 [[ "${1:-}" == "--no-pause" ]] && NO_PAUSE=1
-
-mkdir -p "$PROFILES_DIR"
-LOG_FILE="$PROFILES_DIR/evaluacion-profesor.log"
-
-if command -v VBoxManage >/dev/null 2>&1; then
-    VBOX="VBoxManage"
-elif [[ -x "/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" ]]; then
-    VBOX="/c/Program Files/Oracle/VirtualBox/VBoxManage.exe"
-    export PATH="/c/Program Files/Oracle/VirtualBox:$PATH"
-else
-    echo "ERROR: No se encontró VBoxManage." >&2
-    exit 1
-fi
-
-if [[ -t 1 ]]; then
-    C_RESET='\033[0m'
-    C_BOLD='\033[1m'
-    C_BLUE='\033[1;34m'
-    C_CYAN='\033[1;36m'
-    C_GREEN='\033[1;32m'
-    C_YELLOW='\033[1;33m'
-    C_RED='\033[1;31m'
-else
-    C_RESET='' C_BOLD='' C_BLUE='' C_CYAN='' C_GREEN='' C_YELLOW='' C_RED=''
-fi
 
 TOTAL_CHECKS=0
 PASSED_CHECKS=0
 FAILED_CHECKS=0
-: > "$LOG_FILE"
-
-log_out() {
-    printf "%b" "$*"
-    printf "%b" "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE"
-}
-
-banner() {
-    log_out "\n${C_BLUE}==============================================================================${C_RESET}\n"
-    log_out "${C_BOLD}${C_CYAN}  $*${C_RESET}\n"
-    log_out "${C_BLUE}==============================================================================${C_RESET}\n"
-}
 
 substep() { log_out "\n${C_BOLD}${C_YELLOW}>>> $*${C_RESET}\n"; }
 info()    { log_out "    ${C_BLUE}[INFO]${C_RESET} $*\n"; }
@@ -81,51 +27,33 @@ fail_check() {
     log_out "$(printf "    ${C_RED}[FALLO #%02d]${C_RESET} %s" "$TOTAL_CHECKS" "$*")\n"
 }
 
-SSH_OPTS=(-i "$HOST_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
-ssh_ip() { local ip=$1; shift; ssh "${SSH_OPTS[@]}" "$GUEST_USER@$ip" "$@"; }
 scp_ip() { scp "${SSH_OPTS[@]}" "$@"; }
-
-on_exit() {
-    local code=$?
-    printf "\n${C_CYAN}[LOG]${C_RESET} Reporte completo guardado en: %s\n" "$LOG_FILE"
-    if [[ -t 0 && "$NO_PAUSE" == "0" ]]; then
-        printf "\n${C_BOLD}${C_YELLOW}Evaluación finalizada (código %d). Presioná ENTER para cerrar...${C_RESET}" "$code"
-        read -r _ || true
-    fi
-}
-trap on_exit EXIT
 
 run_evaluation() {
     banner "SIMULACIÓN DE EVALUACIÓN Y CORRECCIÓN DEL PROFESOR — REDES TPE"
 
-    # ==========================================================================
-    # ETAPA 0: Preparación limpia desde el snapshot 'demo'
-    # ==========================================================================
     banner "ETAPA 0: RESTAURACIÓN DE SNAPSHOT 'demo' Y VERIFICACIÓN DE AISLAMIENTO OFFLINE"
 
     substep "0.1 Verificando o restaurando el snapshot 'demo' en las 6 VMs..."
     if [[ $("$VBOX" list runningvms | wc -l) -eq 6 ]] && ssh_ip 192.168.100.20 "echo $GUEST_PASS | sudo -S test -f /root/ca-store/ccd/dev-01" 2>/dev/null; then
         info "Las 6 VMs ya están encendidas en el estado limpio del snapshot 'demo'."
     else
-        NO_PAUSE=1 bash "$SCRIPT_DIR/setup-lab.sh" reset-demo --no-pause
+        bash "$SCRIPT_DIR/setup-lab.sh" reset-demo --no-pause
     fi
 
     substep "0.2 Verificando que ninguna de las 6 VMs tenga interfaz NAT conectada a Internet..."
     local offline_ok=1 vm nic1
-    for vm in gw-vpn k8s-node ca cli-adm gw-sucursal host-suc; do
+    for vm in "${ALL_VMS[@]}"; do
         nic1=$("$VBOX" showvminfo "$vm" --machinereadable | tr -d '\r' | sed -n 's/^nic1="\(.*\)"/\1/p')
         info "VM '$vm' -> nic1=\"$nic1\""
         [[ "$nic1" == "none" ]] || offline_ok=0
     done
     if [[ "$offline_ok" -eq 1 ]]; then
-        pass_check "Las 6 VMs tienen NIC 1 deshabilitada (nic1=none, 100% sin Internet)."
+        pass_check "Las 6 VMs tienen NIC 1 deshabilitada (nic1=none, sin Internet)."
     else
         fail_check "Alguna VM aún tiene NIC 1 habilitada."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 1 (CU1): Seguridad en WAN, Ruteo Directo, Stealth 1194 y Hardening
-    # ==========================================================================
     banner "ESCENARIO 1 (CU1): SEGURIDAD EN SEGMENTO NO CONFIABLE (WAN) Y HARDENING"
 
     substep "1.1 Escaneo/conexión desde WAN (203.0.113.51) hacia SSH y HTTP de gw-vpn (203.0.113.10)..."
@@ -178,10 +106,7 @@ run_evaluation() {
         fail_check "Configuración de privilegios de OpenVPN ($ovpn_user) o sshd ($sshd_listen) incorrecta."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 2 (CU2 y CU5): Desarrollador (dev-01, 10.8.0.10) y Flujo E-Commerce
-    # ==========================================================================
-    banner "ESCENARIO 2 (CU2 y CU5): DESARROLLADOR (dev-01, 10.8.0.10) Y COMPRA EN LA TIENDA"
+    banner "ESCENARIO 2 (CU2, CU3 y CU5): DESARROLLADOR (dev-01, 10.8.0.10)"
 
     substep "2.1 Levantando cliente 'dev-01' (10.8.0.10) en un namespace de red aislado (en paralelo con admin-01 y gw-sucursal)..."
     scp_ip "$PROFILES_DIR/dev-01.ovpn" "$GUEST_USER@203.0.113.51:/tmp/dev-01.ovpn"
@@ -233,7 +158,7 @@ run_evaluation() {
         fail_check "dev-01 no recibió la IP o ruta esperada."
     fi
 
-    substep "2.2 Verificando resolución DNS interna (10.8.0.1) desde dev-01 y rechazo de dominios externos..."
+    substep "2.2 CU5: resolución DNS interna (10.8.0.1) desde dev-01 y rechazo de dominios externos..."
     local dns_ui dns_ext
     dns_ui=$(ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns dig +short @10.8.0.1 ui.the-store.internal")
     dns_ext=$(ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns dig @10.8.0.1 example.com | grep -o 'status: [A-Z]*'")
@@ -245,12 +170,12 @@ run_evaluation() {
         fail_check "Comportamiento inesperado del DNS en 10.8.0.1."
     fi
 
-    substep "2.3 Caso de Uso de Negocio (CU5): Flujo de compra real en los microservicios desde dev-01 (10.8.0.10)..."
-    local catalog_json cart_post cart_get ui_title
+    substep "2.3 Flujo de compra real en los microservicios desde dev-01 (10.8.0.10)..."
+    local catalog_json cart_get ui_title
     catalog_json=$(ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns curl -fsS --max-time 10 http://catalog.the-store.internal/catalog/products")
     info "Catálogo obtenido desde http://catalog.the-store.internal/catalog/products (primeros 160 chars):"
     echo "        ${catalog_json:0:160}..."
-    cart_post=$(ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' -d '{\"itemId\":\"a1258cd2-176c-4507-ade6-746dab5ad625\",\"unitPrice\":199,\"quantity\":2}' http://carts.the-store.internal/carts/eval-profesor/items")
+    ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' -d '{\"itemId\":\"a1258cd2-176c-4507-ade6-746dab5ad625\",\"unitPrice\":199,\"quantity\":2}' http://carts.the-store.internal/carts/eval-profesor/items" >/dev/null
     cart_get=$(ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns curl -fsS --max-time 10 http://carts.the-store.internal/carts/eval-profesor/items")
     info "Ítem 'Aqua Ace GT' agregado y consultado en http://carts.the-store.internal/carts/eval-profesor/items:"
     echo "        $cart_get"
@@ -262,7 +187,7 @@ run_evaluation() {
         fail_check "Fallo al operar sobre los microservicios desde dev-01."
     fi
 
-    substep "2.4 Verificando bloqueo de Firewall (nftables) para dev-01 (10.8.0.10) hacia SSH (22), API K8s (6443) y Gestión..."
+    substep "2.4 CU3: bloqueo de firewall (nftables) para dev-01 (10.8.0.10) hacia SSH (22), API K8s (6443) y Gestión..."
     if ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns bash -c '
         ! timeout 2 bash -c \"true </dev/tcp/10.10.10.5/22\" 2>/dev/null &&
         ! timeout 2 bash -c \"true </dev/tcp/10.10.10.5/6443\" 2>/dev/null &&
@@ -276,9 +201,24 @@ run_evaluation() {
         fail_check "dev-01 pudo alcanzar un puerto administrativo restringido."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 3 (CU3): Sysadmin (admin-01, 10.8.0.20) — SSH, K8s API y RBAC
-    # ==========================================================================
+    substep "2.5 CU5: el HTTP de dev-01 viaja cifrado por la WAN y en claro por la LAN interna (captura simultánea en gw-vpn)..."
+    local wan_cap lan_cap wan_pkts
+    wan_cap=$(mktemp)
+    lan_cap=$(mktemp)
+    ssh_ip 192.168.100.1 "echo $GUEST_PASS | sudo -S timeout 10 tcpdump -ni eth0 -A -l udp port 1194 2>/dev/null" > "$wan_cap" 2>/dev/null &
+    ssh_ip 192.168.100.1 "echo $GUEST_PASS | sudo -S timeout 10 tcpdump -ni eth1 -A -l tcp port 80 2>/dev/null" > "$lan_cap" 2>/dev/null &
+    sleep 3
+    ssh_ip 203.0.113.51 "echo $GUEST_PASS | sudo -S ip netns exec dev-ns bash -c 'for i in 1 2 3; do curl -fsS --max-time 5 http://ui.the-store.internal/ >/dev/null; done'" || true
+    wait
+    wan_pkts=$(grep -c 'UDP, length' "$wan_cap" || true)
+    info "Datagramas UDP/1194 vistos en la WAN (eth0 de gw-vpn): $wan_pkts"
+    if [[ "$wan_pkts" -gt 0 ]] && ! grep -q 'the-store.internal' "$wan_cap" && grep -q 'Host: ui.the-store.internal' "$lan_cap"; then
+        pass_check "En la WAN solo se ve UDP/1194 cifrado (sin nombres ni HTTP) y en la LAN interna (eth1) el mismo tráfico aparece en claro."
+    else
+        fail_check "La captura no mostró tráfico cifrado en la WAN y HTTP en claro en la LAN."
+    fi
+    rm -f "$wan_cap" "$lan_cap"
+
     banner "ESCENARIO 3 (CU3): SYSADMIN (admin-01, 10.8.0.20) — ADMINISTRACIÓN Y MENOR PRIVILEGIO (RBAC)"
 
     substep "3.1 Acceso SSH como root@10.10.10.5 desde cli-adm (10.8.0.20) con clave ed25519..."
@@ -337,10 +277,7 @@ run_evaluation() {
         fail_check "El Sysadmin pudo alcanzar SSH del Gateway o de la CA."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 4 (Sucursal): host-suc (172.16.20.10) a través de gw-sucursal
-    # ==========================================================================
-    banner "ESCENARIO 4 (SUCURSAL SITE-TO-SITE): HOST DE SUCURSAL (172.16.20.10 -> 10.8.0.30)"
+    banner "ESCENARIO 4 (CU6, SUCURSAL SITE-TO-SITE): HOST DE SUCURSAL (172.16.20.10 -> 10.8.0.30)"
 
     substep "4.1 Verificando desde 'host-suc' (172.16.20.10) ausencia de cliente VPN local, DNS split-horizon, acceso HTTP y bloqueo de puertos..."
     local branch_out
@@ -372,9 +309,6 @@ run_evaluation() {
         fail_check "Fallo en las validaciones de la sucursal."
     fi
 
-    # ==========================================================================
-    # ESCENARIO 5 (CU4): Revocación en Caliente de dev-01 desde la CA (192.168.100.20)
-    # ==========================================================================
     banner "ESCENARIO 5 (CU4): REVOCACIÓN EN CALIENTE DE 'dev-01' DESDE LA CA Y CORTE INMEDIATO"
 
     substep "5.1 Verificando que ANTES de revocar están los 3 clientes conectados en gw-vpn (dev-01, admin-01 y gw-sucursal)..."
@@ -442,30 +376,24 @@ run_evaluation() {
         fail_check "No se registró el rechazo por CRL en los logs de gw-vpn."
     fi
 
-    # ==========================================================================
-    # ETAPA FINAL: Restauración rápida del snapshot 'demo'
-    # ==========================================================================
     banner "ETAPA FINAL: RESTAURACIÓN DEL SNAPSHOT 'demo' PARA DEJAR EL LABORATORIO LIMPIO"
-    NO_PAUSE=1 bash "$SCRIPT_DIR/setup-lab.sh" stop --no-pause
+    bash "$SCRIPT_DIR/setup-lab.sh" stop --no-pause
     substep "Restaurando snapshot 'demo' en las 6 VMs con 'virtualbox.sh restore'..."
     bash "$SCRIPT_DIR/virtualbox.sh" restore </dev/null
     substep "Reiniciando las 6 VMs en segundo plano para dejarlas listas..."
-    for vm in gw-vpn k8s-node ca cli-adm gw-sucursal host-suc; do
+    for vm in "${ALL_VMS[@]}"; do
         info "Encendiendo VM '$vm'..."
         "$VBOX" startvm "$vm" --type headless </dev/null >/dev/null 2>&1
         sleep 1
     done
-    pass_check "Snapshot 'demo' restaurado y las 6 VMs iniciadas limpiamente (dev-01 vuelve a estar habilitado)."
+    info "Snapshot 'demo' restaurado y las 6 VMs iniciadas (dev-01 vuelve a estar habilitado)."
 
-    # ==========================================================================
-    # RESUMEN DE CALIFICACIÓN
-    # ==========================================================================
     banner "RESULTADO FINAL DE LA EVALUACIÓN DEL PROFESOR"
     log_out "  Controles evaluados : $TOTAL_CHECKS\n"
     log_out "  Controles aprobados : ${C_GREEN}$PASSED_CHECKS${C_RESET}\n"
     log_out "  Controles fallidos  : ${C_RED}$FAILED_CHECKS${C_RESET}\n"
     if [[ "$FAILED_CHECKS" -eq 0 ]]; then
-        log_out "\n  ${C_BOLD}${C_GREEN}CALIFICACIÓN: 100% APROBADO — TODOS LOS CASOS DE USO (CU1..CU5 + SUCURSAL) VERIFICADOS${C_RESET}\n"
+        log_out "\n  ${C_BOLD}${C_GREEN}TODOS LOS CONTROLES APROBADOS (CU1..CU6)${C_RESET}\n"
     else
         log_out "\n  ${C_BOLD}${C_RED}ATENCIÓN: Se detectaron $FAILED_CHECKS controles fallidos.${C_RESET}\n"
         return 1

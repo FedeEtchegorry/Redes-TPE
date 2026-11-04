@@ -125,6 +125,12 @@ k8s_node_routes_through_gw_vpn() {
     grep -qx 'Gateway=10.10.0.1' <<< "$network"
 }
 
+cli_adm_profile_runs_dns_hook() {
+    local profile=$CLI_ADM/etc/openvpn/client/the-store.conf
+    grep -qx 'script-security 2' "$profile" && grep -q '^up .*resolvectl domain .*~the-store.internal' "$profile" &&
+        grep -qx 'up-restart' "$profile"
+}
+
 cli_adm_routes_through_wan_gateway() {
     local network
     network=$(cat "$CLI_ADM/run/systemd/network/10-netplan-eth0.network") || return 1
@@ -230,7 +236,7 @@ run "The CA can log in as the-store-crl with its key" \
     cmp "$WORK/ca-key.pub" "$GW_VPN/home/the-store-crl/.ssh/authorized_keys"
 run "gw-vpn installs its packages, creates the-store-crl and enables its services" commands_are gw-vpn \
     "apt-get update
-env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes openvpn nftables dnsmasq socat
+env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes openvpn nftables dnsmasq socat tcpdump
 useradd --system --create-home --shell /bin/bash the-store-crl
 chown -R the-store-crl: /home/the-store-crl/.ssh
 systemctl enable nftables dnsmasq openvpn-server@the-store"
@@ -334,7 +340,8 @@ run "cli-adm gets only its files, with the profile readable by root only" listin
 755 ./etc/openvpn
 755 ./etc/openvpn/client
 600 ./etc/openvpn/client/the-store.conf"
-run "cli-adm installs the openvpn client profile" cmp "$WORK/admin-01.ovpn" "$CLI_ADM/etc/openvpn/client/the-store.conf"
+run "cli-adm installs the openvpn client profile" cmp -n "$(stat -c %s "$WORK/admin-01.ovpn")" "$WORK/admin-01.ovpn" "$CLI_ADM/etc/openvpn/client/the-store.conf"
+run "cli-adm profile runs the split DNS hook on every start and restart of tun0" cli_adm_profile_runs_dns_hook
 run "cli-adm installs its packages and enables openvpn" commands_are cli-adm \
     "apt-get update
 env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install --yes openvpn nmap curl socat

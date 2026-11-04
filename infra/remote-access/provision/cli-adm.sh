@@ -14,6 +14,7 @@ check_mac "$ETH0_MAC"
 
 # Install OpenVPN client profile
 put 600 "$PROFILE" /etc/openvpn/client/the-store.conf
+cat "$ROOT/clients/cli-adm/dns.conf" >> "$DESTDIR/etc/openvpn/client/the-store.conf"
 
 # Install packages required for administration, testing and scanning (CU1, CU3)
 install_packages openvpn nmap curl socat

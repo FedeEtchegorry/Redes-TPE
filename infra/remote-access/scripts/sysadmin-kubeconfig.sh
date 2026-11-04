@@ -14,24 +14,9 @@ CA_DATA=$(kubectl config view --raw --minify --output 'jsonpath={.clusters[0].cl
 [[ -n "$CA_DATA" ]] || { echo "The current context has no embedded cluster CA" >&2; exit 1; }
 TOKEN=$(kubectl -n the-store create token sysadmin --duration "$DURATION")
 
-cat > "$OUTPUT" <<EOF
-apiVersion: v1
-kind: Config
-clusters:
-  - name: the-store
-    cluster:
-      server: https://$ADDRESS:6443
-      certificate-authority-data: $CA_DATA
-users:
-  - name: sysadmin
-    user:
-      token: $TOKEN
-contexts:
-  - name: sysadmin
-    context:
-      cluster: the-store
-      user: sysadmin
-      namespace: the-store
-current-context: sysadmin
-EOF
+KUBECONFIG_TEXT=$(<"$(dirname "${BASH_SOURCE[0]}")/../k8s/sysadmin-kubeconfig.yaml")
+KUBECONFIG_TEXT=${KUBECONFIG_TEXT//@ADDRESS@/"$ADDRESS"}
+KUBECONFIG_TEXT=${KUBECONFIG_TEXT//@CA_DATA@/"$CA_DATA"}
+KUBECONFIG_TEXT=${KUBECONFIG_TEXT//@TOKEN@/"$TOKEN"}
+printf '%s\n' "$KUBECONFIG_TEXT" > "$OUTPUT"
 printf 'Sysadmin kubeconfig written to %s (expires in %s)\n' "$OUTPUT" "$DURATION"
