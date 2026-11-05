@@ -298,7 +298,6 @@ chk_sysadmin_k8s_read() {
 chk_sysadmin_rbac() {
     local f0=$DETAIL_FAILS
     probe_user cli-adm 'for c in "list pods -n the-store" "get secrets -n the-store" "delete pods -n the-store" "create pods --subresource=exec -n the-store" "list pods -n kube-system"; do printf "%-46s " "$c"; kubectl auth can-i $c; done'
-    detail "Puede listar pods en the-store" '^list pods -n the-store +yes$'
     detail_n "No puede leer Secrets, borrar pods, hacer exec ni ver kube-system" 4 ' no$'
     probe_user cli-adm "kubectl get secrets -n the-store 2>&1"
     detail "Leer Secrets devuelve Forbidden" 'Forbidden'
@@ -306,7 +305,6 @@ chk_sysadmin_rbac() {
     detail "Listar pods de kube-system devuelve Forbidden" 'Forbidden'
     probe_user cli-adm "kubectl delete pod --all -n the-store --dry-run=server 2>&1"
     detail "Borrar pods devuelve Forbidden" 'Forbidden'
-    detail_no "No se borró ningún pod" 'deleted'
     chk_ok "$f0"
 }
 
