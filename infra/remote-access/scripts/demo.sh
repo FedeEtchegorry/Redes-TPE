@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Demostración guiada, caso por caso, con la salida real de cada comando y un veredicto [OK]/[FALLO].
-# Uso: demo.sh [cu1|cu2|cu3|cu4|cu5|cu6|todo]. CU2 a CU5 requieren dev-02 conectado; CU4 revoca (después: setup-lab.sh reset-demo).
+# Uso: demo.sh [cu1|cu2|cu3|cu4|cu5|cu6|todo]. CU2 a CU5 conectan dev-02 solos desde una terminal de administrador; CU4 revoca (después: setup-lab.sh reset-demo).
 
 set -euo pipefail
 
@@ -46,9 +46,20 @@ fin_caso() {
     printf "\n${color}${C_BOLD}Resultado %s: %d correctas, %d fallidas${C_RESET}\n" "$1" "$ok" "$fallos"
 }
 
+tunel_arriba() { curl -s --noproxy '*' --max-time 4 -o /dev/null http://ui.the-store.internal/home; }
+
+conecta_dev() {
+    local gui="${PROGRAMFILES:-/c/Program Files}/OpenVPN/bin/openvpn-gui.exe" i
+    tunel_arriba && return 0
+    [[ -x "$gui" ]] || return 1
+    if tasklist | grep -qi openvpn-gui; then "$gui" --command connect "$DEV_CLIENT"; else "$gui" --connect "$DEV_CLIENT" & fi
+    for i in {1..20}; do tunel_arriba && return 0; sleep 1; done
+    return 1
+}
+
 requiere_tunel() {
-    curl -s --noproxy '*' --max-time 4 -o /dev/null http://ui.the-store.internal/home && return 0
-    printf "${C_RED}Sin túnel: conectá el perfil %s en OpenVPN GUI y repetí este caso.${C_RESET}\n" "$DEV_CLIENT"
+    conecta_dev </dev/null >/dev/null 2>&1 && return 0
+    printf "${C_RED}Sin túnel: no se pudo conectar %s con OpenVPN GUI; conectalo a mano y repetí este caso.${C_RESET}\n" "$DEV_CLIENT"
     return 1
 }
 
@@ -120,8 +131,7 @@ cu2() {
     detail "El perfil incluye tls-crypt" '<tls-crypt>'
     pausa
 
-    paso "Conectá '$DEV_CLIENT' desde el ícono de OpenVPN GUI"
-    pausa
+    paso "Se conecta '$DEV_CLIENT' con OpenVPN GUI (si no estaba conectado)"
     requiere_tunel || return 0
 
     paso "Del lado del cliente: IP del túnel y rutas (solo hacia 10.10.10.5)"

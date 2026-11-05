@@ -255,17 +255,6 @@ bash demo.sh todo              # CU1, CU2, CU3, CU5, CU6 and CU4
 
 `eval.sh` revokes `dev-01` for real and leaves the VMs running without waiting for them to be ready or renewing credentials: run `bash setup-lab.sh reset-demo` before the demo. Do not run `eval.sh` and `demo.sh` at the same time: both use `cli-adm` and the captures on `gw-vpn`. Each run saves its log in `infra/remote-access/profiles/` (`demo.log`, `eval.log`, `setup-lab.log`).
 
-### Troubleshooting
-
-| Symptom | What to do |
-|---------|------------|
-| `El laboratorio no está encendido` | `bash setup-lab.sh start` |
-| `Sin túnel: conectá el perfil dev-02` | Connect `dev-02` in OpenVPN GUI and repeat the case; if it does not connect, open its log (right-click the icon, `dev-02`, Show log) |
-| A `gw-sucursal` or `host-suc` command comes back empty in CU6 (a `[FALLO]` with no output), or step 4 of `verify` or scenario 4.1 of `eval.sh` fails once | On VirtualBox 7.0.x `VBoxManage guestcontrol run` can abort at random (fixed in 7.1.10): repeat the case |
-| `setup-lab.sh` says the VMs already exist but the `demo` snapshot is missing | A previous run stopped halfway: repeat with `RECREATE=1` |
-| `full` waits for SSH after creating the clones | The base may have installed halfway: `"$VB" showvminfo the-store-base --machinereadable` must show `VMState="poweroff"` and `SnapshotName="installed"`; otherwise delete the base and repeat |
-| Frozen console on Windows | Clicking a classic console pauses the process: `Enter` resumes it |
-
 ---
 
 ## 3. Runbook
