@@ -1,6 +1,6 @@
 # Secure remote access: demo, installation and runbook
 
-Everything needed to install, demo and operate The Store's remote-access lab: an OpenVPN gateway, a CA, a Kubernetes node, an administrator client, a branch office and a dev client on Windows. Installation has two paths (an automatic one with six VirtualBox VMs and a manual one), followed by the live demo and the operation runbook. The design and what was implemented are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+Install, demonstrate and operate [The Store](../../README.md)'s six-VM remote-access lab. Architecture and role permissions are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## What gets installed
 
@@ -16,7 +16,7 @@ Everything needed to install, demo and operate The Store's remote-access lab: an
 
 ## Requirements
 
-- Ubuntu Server 24.04 LTS on the six VMs, with the packages from its repository (OpenVPN 2.6, EasyRSA 3.1.7, nftables 1.0.9, dnsmasq 2.91). Use the Ubuntu 24.04 repository packages, the tested set.
+- Ubuntu Server 24.04 LTS on the six VMs, with its repository packages (tested: OpenVPN 2.6, EasyRSA 3.1.7, nftables 1.0.9, dnsmasq 2.91).
 - k8s-node: Kind v0.31.0 and kubectl v1.35.0.
 - Windows 11 with OpenVPN GUI 2.7 and the DCO driver.
 - Internet during installation (APT, Kind, images). The demo runs without it.
@@ -48,8 +48,6 @@ bash setup-lab.sh full --no-pause
 
 It takes about 2 hours, mostly building the images with 1 vCPU. If the base does not exist, add 15 to 30 minutes. The console can stay quiet for several minutes (ISO download, base install, compilation): it is not stuck. From another terminal: `tail -f ../profiles/setup-lab.log`. It ends with `LABORATORIO DESPLEGADO Y SNAPSHOTEADO`.
 
-Other `setup-lab.sh` commands: `status` (networks, VMs, tunnels and pods), `verify` (end-to-end tests), `start`, `stop` and `reset-demo`.
-
 To enter a VM once the lab has no Internet:
 
 ```bash
@@ -58,7 +56,7 @@ ssh -i ../profiles/host_admin_ed25519 home@192.168.100.1    # gw-vpn
 
 User `home` and password `bishbashbosh` (change them with `GUEST_USER` and `GUEST_PASS`).
 
-To rebuild the 6 VMs and the PKI without reinstalling Ubuntu: `RECREATE=1 bash setup-lab.sh full --no-pause` (in PowerShell, define `$env:RECREATE = '1'` first and call `"C:\Program Files\Git\bin\bash.exe"`). To start from zero including the base, delete the VMs first and the base after, because the clones depend on it:
+To rebuild the 6 VMs and the PKI without reinstalling Ubuntu: `RECREATE=1 bash setup-lab.sh full --no-pause`. To start from zero including the base, delete the VMs first and the base after, because the clones depend on it:
 
 ```bash
 VB="/c/Program Files/Oracle/VirtualBox/VBoxManage.exe"
@@ -70,9 +68,9 @@ The files generated on the host (SSH keys, `.ovpn`, bundle and logs) are in `pro
 
 | File | Function |
 | --- | --- |
-| [`scripts/setup-lab.sh`](scripts/setup-lab.sh) | Orchestrates the whole lab: `full`, `status`, `verify`, `reset-demo`, `start`, `stop` and `eval` |
+| [`scripts/setup-lab.sh`](scripts/setup-lab.sh) | `full` builds the lab; `status` inspects networks, VMs, tunnels and pods; `verify` runs end-to-end tests; `reset-demo`, `start`, `stop` and `eval` manage and evaluate it |
 | [`scripts/virtualbox.sh`](scripts/virtualbox.sh) | Networks, base, clones, MACs, Internet cut (`offline`) and snapshots |
-| [`scripts/lab-common.sh`](scripts/lab-common.sh) | Shared by the other scripts: SSH, VM helpers and the `chk_*` checks of CU1-CU6 (one definition, used by `eval.sh` and `demo.sh`) |
+| [`scripts/lab-common.sh`](scripts/lab-common.sh) | Shared SSH, VM helpers and CU1-CU6 checks for evaluation and demo |
 | [`scripts/eval.sh`](scripts/eval.sh) | Runs the `chk_*` checks silently, as a pass/fail evaluation of CU1-CU6 |
 | [`scripts/demo.sh`](scripts/demo.sh) | Guided live demo, case by case: the same `chk_*` checks, showing each command and its raw output |
 | [`scripts/cu2-windows.ps1`](scripts/cu2-windows.ps1) | CU2 test from the Windows client |
@@ -193,6 +191,14 @@ Import `dev-01.ovpn` into OpenVPN GUI 2.7 and connect. The server pushes split D
 | cli-adm, connected | `kubectl -n the-store get pods` and `ssh root@10.10.10.5` | pods listed and an SSH session |
 | host-suc | `curl --noproxy '*' http://ui.the-store.internal/ -o /dev/null` | answers, with no VPN client |
 
+Health endpoints, with the tunnel connected:
+
+```bash
+curl --noproxy '*' http://catalog.the-store.internal/health
+curl --noproxy '*' http://checkout.the-store.internal/health
+curl --noproxy '*' http://ui.the-store.internal/actuator/health/readiness   # also carts and orders
+```
+
 ---
 
 ## 2. Live demo
@@ -221,28 +227,26 @@ bash demo.sh todo              # CU1, CU2, CU3, CU5, CU6 and CU4
 
 > **Connect `dev-02` before CU2.** CU2 to CU5 use the Windows client: import `infra/remote-access/profiles/dev-02.ovpn` into OpenVPN GUI and connect. Each case confirms the tunnel with `curl http://ui.the-store.internal/home` and warns if it is missing. CU1 and CU6 do not need it.
 
-> **Verdicts.** Below each output the script prints `[OK]` or `[FALLO]` depending on what should be seen. Each case ends with `Resultado CUn: X correctas, Y fallidas`, `todo` ends with `Verificaciones: X correctas, Y fallidas`, and the script exits with code 1 if any check fails.
-
-> **Pauses and confirmation.** The script waits for ENTER between steps. `DEMO_AUTO=1 bash demo.sh todo` runs straight through and skips the CU4 confirmation.
+Each check prints `[OK]` or `[FALLO]`, with totals at the end of each case and the full run. Any failed check makes the script exit with code 1.
 
 > **CU4 revokes the certificate of `dev-02`, the client connected on Windows.** It asks for confirmation (`[s/N]`) and first syncs the clocks of `ca` and `gw-vpn` with the host's, because OpenVPN rejects a CRL dated in the future. To return to the initial state before each run: `bash setup-lab.sh reset-demo`, which restores the `demo` snapshot and renews the CRL and the sysadmin kubeconfig.
 
 > **CU1 switches off the tunnel of `cli-adm`** (`admin-01`) for a few seconds to see the lab as a WAN host, and brings it back at the end, also if the script is interrupted. If it stays down: `ssh` to `cli-adm` and `sudo systemctl start openvpn-client@the-store`.
 
-> **CU2 opens the store in the browser** for the manual purchase flow (with `DEMO_AUTO=1` it does not).
+CU2 opens the browser for the manual purchase flow. `DEMO_AUTO=1 bash demo.sh todo` skips pauses, the browser and the CU4 confirmation.
 
-> **Another dev client.** `DEV_CLIENT` and `DEV_IP` change the profile and the tunnel IP (default `dev-02` and `10.8.0.11`).
+`DEV_CLIENT` and `DEV_IP` change the profile and tunnel IP (default `dev-02` and `10.8.0.11`).
 
 ### Cases
 
 | # | Command | What it shows |
 |---|---------|---------------|
-| 1 | `demo.sh cu1` | `cli-adm` with its tunnel switched off, as a WAN host: `nmap` TCP scan of `gw-vpn` finds no open port and the drops show in the kernel log; SSH gets no answer; `nmap` UDP only says `open\|filtered` and a datagram without the `tls-crypt` key returns 0 bytes; `10.10.10.5:80/22/6443` are unreachable without a route and still dropped (`forward drop`) with a manual route through the gateway; `gw-vpn` listens only on what is planned and OpenVPN runs unprivileged; the nftables rules. At the end the tunnel of `cli-adm` is brought back |
-| 2 | `demo.sh cu2` | Enrollment on the CA (public certificate, issuer, validity, CCD) and the `.ovpn` profile structure; with `dev-02` connected: tunnel IP and a route only to `10.10.10.5`; the NRPT rule that sends only `.the-store.internal` to `10.8.0.1`; `gw-vpn` sees the client with its fixed IP and its log shows the certificate verification; DNS resolves the zone and rejects `example.com`; the catalog and the UI answer, an item goes into a cart through the API, and the browser opens the store for the manual purchase flow |
-| 3 | `demo.sh cu3` | The CCD files and the nftables forward rules per IP range. Dev: `10.10.10.5:80` open, `:22`, `:6443` and `10.8.0.1:22` blocked and audited (`forward drop`), and the five microservices answer HTTP 200. Sysadmin from `cli-adm`: same destination with 80, 22 and 6443 open, SSH to the node, `kubectl get pods` and logs, the RBAC matrix (`list pods` yes; `get secrets`, `delete pods`, `exec`, `kube-system` no) and no access to `gw-vpn` or the CA |
-| 4 | `demo.sh cu4` | Three clients connected and the sysadmin operating. `pki.sh revoke` on the CA (the CRL changes only there and `dev-02` stays connected), then `publish-crl`: the CRL is installed and the session is cut. `dev-02` disappears, `admin-01` and `gw-sucursal` stay, `kubectl` keeps working and Windows loses the store. The revoked profile tries to reconnect from `cli-adm` and the OpenVPN log shows `certificate revoked` |
-| 5 | `demo.sh cu5` | Simultaneous capture on `gw-vpn` while Windows requests the UI and resolves names: on `eth0` only encrypted UDP/1194 with no names; on `eth1` the same traffic is readable HTTP; on `tun0` only `.the-store.internal` queries arrive (`google.com` does not). The Windows default route stays local and only `10.10.10.5/32` goes through the VPN |
-| 6 | `demo.sh cu6` | `gw-sucursal` with its tunnel, the route and `iroute` on `gw-vpn`, no NAT and only `172.16.20.0/24` to `10.10.10.5:80` forwarded. `host-suc` has no OpenVPN client; its DNS at `172.16.20.1` resolves the five services (all answer HTTP 200); `10.10.10.5:22`, `:6443` and `172.16.20.1:22` are blocked. Between the gateways only UDP/1194 without names flows, and on `tun0` the source `172.16.20.10` is preserved |
+| 1 | `demo.sh cu1` | Without a tunnel, WAN access to gw-vpn's TCP ports and the node's 80/22/6443 is blocked, even with a manual route. A UDP probe without `tls-crypt` gets no reply (`open\|filtered` alone is inconclusive). Shows listener bindings, unprivileged OpenVPN and drop logs |
+| 2 | `demo.sh cu2` | CA enrollment and profile; Windows tunnel IP, node-only route and split DNS; catalog, UI and cart API, followed by the browser purchase flow |
+| 3 | `demo.sh cu3` | Dev reaches HTTP on the five services, but not SSH or the API. Sysadmin reaches HTTP/SSH/API on the node and reads pods and logs, but cannot access Secrets, delete pods, `exec` or `kube-system`. Neither role reaches the gateway or CA over SSH |
+| 4 | `demo.sh cu4` | Revokes `dev-02`, publishes the CRL, cuts its session and rejects reconnection. `admin-01` and `gw-sucursal` stay connected, and kubectl keeps working |
+| 5 | `demo.sh cu5` | Captures show encrypted UDP/1194 on the WAN, readable HTTP behind the gateway and only internal-zone DNS on `tun0`. Windows keeps its local default route; only `10.10.10.5/32` uses the VPN |
+| 6 | `demo.sh cu6` | `host-suc` resolves the five services and reaches HTTP without a VPN client; node SSH/API and branch gateway SSH are blocked. Site-to-site routing preserves the branch source IP without NAT |
 
 `todo` ends with CU4 because revoking `dev-02` cuts the tunnel that CU2, CU3 and CU5 need.
 
@@ -259,11 +263,9 @@ bash demo.sh todo              # CU1, CU2, CU3, CU5, CU6 and CU4
 
 ## 3. Runbook
 
-The commands below run on the CA with the variables of [manual step 1](#1-ca) (`CA_DIR`, `PKI_SH`).
+PKI commands run on the CA with the variables of [manual step 1](#1-ca) (`CA_DIR`, `PKI_SH`).
 
-### What gw-vpn runs
-
-[`provision/gw-vpn.sh`](provision/gw-vpn.sh) verifies the bundle, the key and the MACs before changing anything. Then it installs `openvpn`, `nftables`, `dnsmasq` and `socat`, the files of [`gateway/`](gateway/) and the `the-store-crl` account, which with sudo can only run `the-store-update-crl`. Services start after the reboot. Drops are logged:
+### Firewall logs (gw-vpn)
 
 ```bash
 sudo journalctl -k --grep 'the-store (input|forward) drop'
