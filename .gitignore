@@ -33,3 +33,6 @@ devenv.local.nix
 
 # Assignment specification
 *.pdf
+
+# Notas y explicaciones del proyecto
+/notas/
